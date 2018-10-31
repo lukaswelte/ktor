@@ -1,12 +1,12 @@
 package io.ktor.server.netty.http2
 
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.http.*
 import io.ktor.response.*
 import io.ktor.server.netty.*
 import io.netty.channel.*
 import io.netty.handler.codec.http2.*
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 
 internal class NettyHttp2ApplicationResponse(call: NettyApplicationCall,
                                              val handler: NettyHttp2Handler,
@@ -25,6 +25,10 @@ internal class NettyHttp2ApplicationResponse(call: NettyApplicationCall,
     }
 
     override fun responseMessage(chunked: Boolean, last: Boolean): Any {
+        // transfer encoding should be never set for HTTP/2
+        // so we simply remove header
+        // it should be lower case
+        responseHeaders.remove("transfer-encoding")
         return DefaultHttp2HeadersFrame(responseHeaders, false)
         // endStream should be false
         // as response pipeline is always sending at least one data frame
@@ -39,8 +43,8 @@ internal class NettyHttp2ApplicationResponse(call: NettyApplicationCall,
             responseHeaders.add(name.toLowerCase(), value)
         }
 
+        override fun get(name: String): String? = responseHeaders[name]?.toString()
         override fun getEngineHeaderNames(): List<String> = responseHeaders.names().map { it.toString() }
-
         override fun getEngineHeaderValues(name: String): List<String> = responseHeaders.getAll(name).map { it.toString() }
     }
 

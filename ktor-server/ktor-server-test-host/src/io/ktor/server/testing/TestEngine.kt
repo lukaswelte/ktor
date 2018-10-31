@@ -7,22 +7,40 @@ import io.ktor.server.engine.*
 import org.slf4j.*
 import java.util.concurrent.*
 
-fun createTestEnvironment(configure: ApplicationEngineEnvironmentBuilder.() -> Unit = {}) = applicationEngineEnvironment {
-    config = MapApplicationConfig("ktor.deployment.environment" to "test")
-    log = LoggerFactory.getLogger("ktor.test")
-    configure()
-}
-
-fun TestApplicationEngine.handleRequest(method: HttpMethod, uri: String, setup: TestApplicationRequest.() -> Unit = {}): TestApplicationCall {
-    return handleRequest {
-        this.uri = uri
-        this.method = method
-        setup()
+/**
+ * Creates test application engine environment
+ */
+fun createTestEnvironment(
+    configure: ApplicationEngineEnvironmentBuilder.() -> Unit = {}
+): ApplicationEngineEnvironment =
+    applicationEngineEnvironment {
+        config = MapApplicationConfig("ktor.deployment.environment" to "test")
+        log = LoggerFactory.getLogger("ktor.test")
+        configure()
     }
+
+/**
+ * Make a test request
+ */
+fun TestApplicationEngine.handleRequest(
+    method: HttpMethod,
+    uri: String,
+    setup: TestApplicationRequest.() -> Unit = {}
+): TestApplicationCall = handleRequest {
+    this.uri = uri
+    this.method = method
+    setup()
 }
 
-fun <R> withApplication(environment: ApplicationEngineEnvironment = createTestEnvironment(), test: TestApplicationEngine.() -> R): R {
-    val engine = TestApplicationEngine(environment)
+/**
+ * Start test application engine, pass it to [test] function and stop it
+ */
+fun <R> withApplication(
+    environment: ApplicationEngineEnvironment = createTestEnvironment(),
+    configure: TestApplicationEngine.Configuration.() -> Unit = {},
+    test: TestApplicationEngine.() -> R
+): R {
+    val engine = TestApplicationEngine(environment, configure)
     engine.start()
     try {
         return engine.test()
@@ -31,12 +49,32 @@ fun <R> withApplication(environment: ApplicationEngineEnvironment = createTestEn
     }
 }
 
+/**
+ * Start test application engine, pass it to [test] function and stop it
+ */
 fun <R> withTestApplication(test: TestApplicationEngine.() -> R): R {
     return withApplication(createTestEnvironment(), test = test)
 }
 
+/**
+ * Start test application engine, pass it to [test] function and stop it
+ */
 fun <R> withTestApplication(moduleFunction: Application.() -> Unit, test: TestApplicationEngine.() -> R): R {
     return withApplication(createTestEnvironment()) {
+        moduleFunction(application)
+        test()
+    }
+}
+
+/**
+ * Start test application engine, pass it to [test] function and stop it
+ */
+fun <R> withTestApplication(
+    moduleFunction: Application.() -> Unit,
+    configure: TestApplicationEngine.Configuration.() -> Unit = {},
+    test: TestApplicationEngine.() -> R
+): R {
+    return withApplication(createTestEnvironment(), configure) {
         moduleFunction(application)
         test()
     }
@@ -46,7 +84,7 @@ fun <R> withTestApplication(moduleFunction: Application.() -> Unit, test: TestAp
  * An [ApplicationEngineFactory] providing a CIO-based [ApplicationEngine]
  */
 object TestEngine : ApplicationEngineFactory<TestApplicationEngine, TestApplicationEngine.Configuration> {
-    override fun create(environment: ApplicationEngineEnvironment, configure: TestApplicationEngine.Configuration.() -> Unit): TestApplicationEngine {
-        return TestApplicationEngine(environment, configure)
-    }
+    override fun create(
+        environment: ApplicationEngineEnvironment, configure: TestApplicationEngine.Configuration.() -> Unit
+    ): TestApplicationEngine = TestApplicationEngine(environment, configure)
 }

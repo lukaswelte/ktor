@@ -1,6 +1,6 @@
 package io.ktor.http
 
-@Suppress("unused")
+@Suppress("unused", "KDocMissingDocumentation", "PublicApiImplicitType", "MayBeConstant")
 object HttpHeaders {
     // Permanently registered standard HTTP headers
     // The list is taken from http://www.iana.org/assignments/message-headers/message-headers.xml#perm-headers
@@ -104,5 +104,27 @@ object HttpHeaders {
     val XForwardedServer = "X-Forwarded-Server"
     val XForwardedProto = "X-Forwarded-Proto"
     val XForwardedFor = "X-Forwarded-For"
+
+    val XRequestId = "X-Request-ID"
+    val XCorrelationId = "X-Correlation-ID"
+
+    /**
+     * Check if [header] is unsafe. Header is unsafe if listed in [UnsafeHeaders]
+     */
+    fun isUnsafe(header: String): Boolean = UnsafeHeaders.any { it.equals(header, ignoreCase = true) }
+
+    val UnsafeHeaders: Array<String> = arrayOf(
+        HttpHeaders.ContentLength,
+        HttpHeaders.ContentType,
+        HttpHeaders.TransferEncoding,
+        HttpHeaders.Upgrade
+    )
 }
 
+/**
+ * Thrown when an attempt to set unsafe header detected. A header is unsafe if listed in [HttpHeaders.UnsafeHeaders].
+ */
+class UnsafeHeaderException(header: String) : IllegalArgumentException(
+    "Header $header is controlled by the engine and " +
+        "cannot be set explicitly"
+)

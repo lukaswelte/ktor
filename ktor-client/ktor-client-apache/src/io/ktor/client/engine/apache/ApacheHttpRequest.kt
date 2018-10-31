@@ -2,72 +2,68 @@ package io.ktor.client.engine.apache
 
 import io.ktor.client.call.*
 import io.ktor.client.request.*
-import io.ktor.client.response.*
-import io.ktor.content.*
 import io.ktor.http.*
+import io.ktor.http.content.*
 import io.ktor.util.*
-import kotlinx.coroutines.experimental.*
+import io.ktor.util.date.*
+import kotlinx.coroutines.*
 import org.apache.http.concurrent.*
 import org.apache.http.impl.nio.client.*
-import java.util.*
 import java.util.concurrent.atomic.*
+import kotlin.coroutines.*
 
 
-class ApacheHttpRequest(
-        override val call: HttpClientCall,
-        private val engine: CloseableHttpAsyncClient,
-        private val config: ApacheEngineConfig,
-        private val dispatcher: CoroutineDispatcher,
-        private val requestData: HttpRequestData
+internal class ApacheHttpRequest(
+    override val call: HttpClientCall,
+    requestData: HttpRequestData
 ) : HttpRequest {
-    override val attributes: Attributes = Attributes()
+    override val attributes: Attributes = requestData.attributes
 
     override val method: HttpMethod = requestData.method
     override val url: Url = requestData.url
     override val headers: Headers = requestData.headers
-
-    override val executionContext: CompletableDeferred<Unit> = requestData.executionContext
-
-    override suspend fun execute(content: OutgoingContent): HttpResponse {
-        val request = ApacheRequestProducer(requestData, config, content, dispatcher, executionContext)
-        return engine.sendRequest(call, request, dispatcher)
-    }
+    override val content: OutgoingContent = requestData.body as OutgoingContent
 }
 
-private suspend fun CloseableHttpAsyncClient.sendRequest(
-        call: HttpClientCall,
-        request: ApacheRequestProducer,
-        dispatcher: CoroutineDispatcher
-): ApacheHttpResponse = suspendCancellableCoroutine { continuation ->
-    val completed = AtomicBoolean(false)
-    val requestTime = Date()
-    val parent = CompletableDeferred<Unit>()
+internal suspend fun CloseableHttpAsyncClient.sendRequest(
+    call: HttpClientCall,
+    request: ApacheRequestProducer,
+    callContext: CoroutineContext
+): ApacheHttpResponse {
+    val response = CompletableDeferred<ApacheHttpResponse>()
+    val requestTime = GMTDate()
 
-    val consumer = ApacheResponseConsumer(dispatcher, parent) { response, body ->
-        if (completed.compareAndSet(false, true)) {
-            val result = ApacheHttpResponse(call, requestTime, parent, response, body)
-            continuation.resume(result)
-        }
+    val consumer = ApacheResponseConsumer(callContext) { rawResponse, body ->
+        val result = ApacheHttpResponse(call, requestTime, rawResponse, body, callContext)
+        response.complete(result)
     }
 
     val callback = object : FutureCallback<Unit> {
         override fun failed(exception: Exception) {
-            parent.completeExceptionally(exception)
-            if (completed.compareAndSet(false, true)) continuation.resumeWithException(exception)
+            callContext.cancel()
+            response.completeExceptionally(exception)
         }
 
         override fun completed(result: Unit) {}
 
         override fun cancelled() {
-            parent.cancel()
-            if (completed.compareAndSet(false, true)) continuation.cancel()
+            callContext.cancel()
+            response.cancel()
         }
     }
 
-    val future = execute(request, consumer, callback)
-    continuation.invokeOnCompletion(onCancelling = true) { cause ->
+    val future = try {
+        execute(request, consumer, callback)
+    } catch (cause: Throwable) {
+        response.completeExceptionally(cause)
+        throw cause
+    }
+
+    response.invokeOnCompletion { cause ->
         cause ?: return@invokeOnCompletion
         future.cancel(true)
-        parent.cancel(cause)
+        callContext.cancel()
     }
+
+    return response.await()
 }

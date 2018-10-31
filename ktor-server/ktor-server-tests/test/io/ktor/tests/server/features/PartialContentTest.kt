@@ -1,7 +1,7 @@
 package io.ktor.tests.server.features
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.features.*
 import io.ktor.http.*
 import io.ktor.response.*
@@ -13,33 +13,72 @@ import java.util.*
 import kotlin.test.*
 
 class PartialContentTest {
-    val basedir = listOf(File("test"), File("ktor-server/ktor-server-tests/test")).map { File(it, "io/ktor/tests/server") }.first(File::exists)
-    val localPath = "features/StaticContentTest.kt"
+    private val basedir = listOf(File("test"), File("ktor-server/ktor-server-tests/test"))
+        .map { File(it, "io/ktor/tests/server") }
+        .first(File::exists)
 
-    fun withRangeApplication(test: TestApplicationEngine.(File) -> Unit) = withTestApplication {
-        application.install(ConditionalHeaders)
-        application.install(CachingHeaders)
-        application.install(PartialContent)
-        application.install(AutoHeadResponse)
-        application.routing {
-            route(localPath) {
-                handle {
-                    val file = basedir.resolve(localPath)
-                    if (file.isFile) {
-                        call.respond(LocalFileContent(file))
+    private val localPath = "features/StaticContentTest.kt"
+
+    private fun withRangeApplication(maxRangeCount: Int? = null, test: TestApplicationEngine.(File) -> Unit) =
+        withTestApplication {
+            application.install(ConditionalHeaders)
+            application.install(CachingHeaders)
+            application.install(PartialContent) {
+                maxRangeCount?.let { this.maxRangeCount = it }
+            }
+            application.install(AutoHeadResponse)
+            application.routing {
+                route(localPath) {
+                    handle {
+                        val file = basedir.resolve(localPath)
+                        if (file.isFile) {
+                            call.respond(LocalFileContent(file))
+                        }
                     }
                 }
             }
+
+            test(File(basedir, localPath))
         }
 
-        test(File(basedir, localPath))
+    @Test
+    fun testCustomMaxRangeCountAccepted() = withRangeApplication(maxRangeCount = 10) { _ ->
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun testCustomMaxRangeCountNotAccepted() = withRangeApplication(maxRangeCount = 0) { _ ->
+    }
+
+    @Test
+    fun testCustomMaxRangeCountAcceptedRange() = withRangeApplication(maxRangeCount = 2) {
+        handleRequest(HttpMethod.Get, localPath) {
+            addHeader(HttpHeaders.Range, "bytes=0-0,2-2")
+        }.let { result ->
+            assertTrue(result.requestHandled)
+            assertEquals(HttpStatusCode.PartialContent, result.response.status())
+            assertEquals(null, result.response.headers[HttpHeaders.ContentRange])
+            assertNotNull(result.response.headers[HttpHeaders.LastModified])
+        }
+    }
+
+    @Test
+    fun testCustomMaxRangeCountAcceptedRangeLimited() = withRangeApplication(maxRangeCount = 2) { file ->
+        handleRequest(HttpMethod.Get, localPath) {
+            addHeader(HttpHeaders.Range, "bytes=0-0,2-2,4-4")
+        }.let { result ->
+            assertTrue(result.requestHandled)
+            assertEquals(HttpStatusCode.PartialContent, result.response.status())
+            assertEquals("bytes 0-4/${file.length()}", result.response.headers[HttpHeaders.ContentRange])
+            assertEquals("packa", result.response.content)
+            assertNotNull(result.response.headers[HttpHeaders.LastModified])
+        }
     }
 
     @Test
     fun testSingleByteRange() = withRangeApplication { file ->
-        handleRequest(HttpMethod.Get, localPath, {
+        handleRequest(HttpMethod.Get, localPath) {
             addHeader(HttpHeaders.Range, "bytes=0-0")
-        }).let { result ->
+        }.let { result ->
             assertTrue(result.requestHandled)
             assertEquals(HttpStatusCode.PartialContent, result.response.status())
             assertEquals("bytes 0-0/${file.length()}", result.response.headers[HttpHeaders.ContentRange])
@@ -50,9 +89,9 @@ class PartialContentTest {
 
     @Test
     fun testTwoBytesRange() = withRangeApplication { file ->
-        handleRequest(HttpMethod.Get, localPath, {
+        handleRequest(HttpMethod.Get, localPath) {
             addHeader(HttpHeaders.Range, "bytes=1-2")
-        }).let { result ->
+        }.let { result ->
             assertTrue(result.requestHandled)
             assertEquals(HttpStatusCode.PartialContent, result.response.status())
             assertEquals("ac", result.response.content)
@@ -63,9 +102,9 @@ class PartialContentTest {
 
     @Test
     fun testUnsatisfiableTailRange() = withRangeApplication { file ->
-        handleRequest(HttpMethod.Get, localPath, {
+        handleRequest(HttpMethod.Get, localPath) {
             addHeader(HttpHeaders.Range, "bytes=-0") // unsatisfiable
-        }).let { result ->
+        }.let { result ->
             assertTrue(result.requestHandled)
             assertEquals(HttpStatusCode.RequestedRangeNotSatisfiable.value, result.response.status()?.value)
             assertEquals("bytes */${file.length()}", result.response.headers[HttpHeaders.ContentRange])
@@ -74,9 +113,9 @@ class PartialContentTest {
 
     @Test
     fun testUnsatisfiableRange() = withRangeApplication { file ->
-        handleRequest(HttpMethod.Get, localPath, {
+        handleRequest(HttpMethod.Get, localPath) {
             addHeader(HttpHeaders.Range, "bytes=1000000-1000004")  // unsatisfiable
-        }).let { result ->
+        }.let { result ->
             assertTrue(result.requestHandled)
             assertEquals(HttpStatusCode.RequestedRangeNotSatisfiable.value, result.response.status()?.value)
             assertEquals("bytes */${file.length()}", result.response.headers[HttpHeaders.ContentRange])
@@ -85,10 +124,9 @@ class PartialContentTest {
 
     @Test
     fun testSyntacticallyIncorrectRange() = withRangeApplication {
-        handleRequest(HttpMethod.Get, localPath, {
+        handleRequest(HttpMethod.Get, localPath) {
             addHeader(HttpHeaders.Range, "bytes=1000000-7") // syntactically incorrect
-        }).let { result ->
-            result.awaitCompletion()
+        }.let { result ->
             assertEquals(HttpStatusCode.OK, result.response.status())
             assertTrue(result.requestHandled)
         }
@@ -96,9 +134,9 @@ class PartialContentTest {
 
     @Test
     fun testGoodAndBadTailRange() = withRangeApplication { file ->
-        handleRequest(HttpMethod.Get, localPath, {
+        handleRequest(HttpMethod.Get, localPath) {
             addHeader(HttpHeaders.Range, "bytes=0-0,-0") // good + unsatisfiable
-        }).let { result ->
+        }.let { result ->
             assertTrue(result.requestHandled)
             assertEquals(HttpStatusCode.PartialContent, result.response.status())
             assertEquals("p", result.response.content)
@@ -109,9 +147,9 @@ class PartialContentTest {
 
     @Test
     fun testGoodAndBadRange() = withRangeApplication { file ->
-        handleRequest(HttpMethod.Get, localPath, {
+        handleRequest(HttpMethod.Get, localPath) {
             addHeader(HttpHeaders.Range, "bytes=0-0,1000000-1000004") // good + unsatisfiable
-        }).let { result ->
+        }.let { result ->
             assertTrue(result.requestHandled)
             assertEquals(HttpStatusCode.PartialContent, result.response.status())
             assertEquals("p", result.response.content)
@@ -121,11 +159,11 @@ class PartialContentTest {
     }
 
     @Test
-    fun testHeadRequestRange() = withRangeApplication {
+    fun testHeadRequestRange() = withRangeApplication { _ ->
         // head request
-        handleRequest(HttpMethod.Head, localPath, {
+        handleRequest(HttpMethod.Head, localPath) {
             addHeader(HttpHeaders.Range, "bytes=0-0")
-        }).let { result ->
+        }.let { result ->
             assertTrue(result.requestHandled)
             assertEquals(HttpStatusCode.OK, result.response.status())
             assertNotNull(result.response.headers[HttpHeaders.LastModified])
@@ -137,20 +175,22 @@ class PartialContentTest {
     @Test
     fun testPostRequestRange() = withRangeApplication {
         // post request
-        handleRequest(HttpMethod.Post, localPath, {
+        handleRequest(HttpMethod.Post, localPath) {
             addHeader(HttpHeaders.Range, "bytes=0-0")
-        }).let { result ->
+        }.let { result ->
             assertTrue(result.requestHandled)
-            assertEquals(HttpStatusCode.MethodNotAllowed.description("Method POST is not allowed with range request"), result.response.status())
+            assertEquals(
+                HttpStatusCode.MethodNotAllowed.description("Method POST is not allowed with range request"),
+                result.response.status()
+            )
         }
     }
 
     @Test
     fun testPostNoRange() = withRangeApplication {
         // post request with no range
-        handleRequest(HttpMethod.Post, localPath, {
-        }).let { result ->
-            result.awaitCompletion()
+        handleRequest(HttpMethod.Post, localPath) {
+        }.let { result ->
             assertTrue(result.requestHandled)
             assertEquals(RangeUnits.Bytes.unitToken, result.response.headers[HttpHeaders.AcceptRanges])
             assertEquals(HttpStatusCode.OK, result.response.status())
@@ -160,13 +200,13 @@ class PartialContentTest {
     @Test
     fun testMultipleRanges() = withRangeApplication {
         // multiple ranges
-        handleRequest(HttpMethod.Get, localPath, {
+        handleRequest(HttpMethod.Get, localPath) {
             addHeader(HttpHeaders.Range, "bytes=0-0,2-2")
-        }).let { result ->
+        }.let { result ->
             assertNull(result.response.headers[HttpHeaders.ContentLength])
 
             assertMultipart(result) { parts ->
-                @Suppress("DEPRECATION")
+                @Suppress("DEPRECATION_ERROR")
                 (kotlin.test.assert(parts) {
                     sizeShouldBe(2)
                     elementAtShouldBe(0, "p")
@@ -179,9 +219,9 @@ class PartialContentTest {
     @Test
     fun testMultipleMergedRanges() = withRangeApplication { file ->
         // multiple ranges should be merged into one
-        handleRequest(HttpMethod.Get, localPath, {
+        handleRequest(HttpMethod.Get, localPath) {
             addHeader(HttpHeaders.Range, "bytes=0-0,1-2")
-        }).let { result ->
+        }.let { result ->
             assertTrue(result.requestHandled)
             assertEquals(HttpStatusCode.PartialContent, result.response.status())
             assertEquals("bytes 0-2/${file.length()}", result.response.headers[HttpHeaders.ContentRange])
@@ -219,7 +259,7 @@ class PartialContentTest {
             assertNotNull(headers[HttpHeaders.ContentType])
 
             val range = headers[HttpHeaders.ContentRange]?.contentRange()
-                    ?: fail("Content-Range is missing in the part")
+                ?: fail("Content-Range is missing in the part")
 
             val length = range.first.length.toInt()
             require(length > 0) { "range shouldn't be empty" }
@@ -254,8 +294,13 @@ class PartialContentTest {
 
     private fun String.contentRange(): Pair<LongRange, Long> {
         assertTrue { startsWith("bytes ") }
-        val (range, size) = removePrefix("bytes ").trimStart().chomp("/") { throw IOException("Missing slash / in Content-Range header value $this") }
-        val (from, to) = range.chomp("-") { throw IOException("Missing range delimiter in Content-Range value $this") }
+
+        val (range, size) = removePrefix("bytes ")
+            .trimStart()
+            .chomp("/") { throw IOException("Missing slash / in Content-Range header value $this") }
+
+        val (from, to) = range
+            .chomp("-") { throw IOException("Missing range delimiter in Content-Range value $this") }
 
         return (from.toLong()..to.toLong()) to size.toLong()
     }
@@ -263,7 +308,10 @@ class PartialContentTest {
     private val LongRange.length: Long
         get() = (endInclusive - start + 1).coerceAtLeast(0L)
 
-    private inline fun String.chomp(separator: String, onMissingDelimiter: () -> Pair<String, String>): Pair<String, String> {
+    private inline fun String.chomp(
+        separator: String,
+        onMissingDelimiter: () -> Pair<String, String>
+    ): Pair<String, String> {
         val idx = indexOf(separator)
         return when (idx) {
             -1 -> onMissingDelimiter()

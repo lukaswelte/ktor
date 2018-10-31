@@ -4,22 +4,30 @@ import io.netty.buffer.*
 import io.netty.channel.*
 import io.netty.handler.codec.http.*
 import io.netty.util.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.Channel
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.io.*
+import kotlin.coroutines.*
 
 internal class RequestBodyHandler(val context: ChannelHandlerContext,
-                                  private val requestQueue: NettyRequestQueue) : ChannelInboundHandlerAdapter() {
+                                  private val requestQueue: NettyRequestQueue) : ChannelInboundHandlerAdapter(), CoroutineScope {
+    private val handlerJob = Job()
+
     private val queue = Channel<Any>(Channel.UNLIMITED)
     private object Upgrade
 
+    override val coroutineContext: CoroutineContext get() = handlerJob
+
+    @UseExperimental(ExperimentalCoroutinesApi::class, ObsoleteCoroutinesApi::class)
     private val job = launch(context.executor().asCoroutineDispatcher(), start = CoroutineStart.LAZY) {
         var current: ByteWriteChannel? = null
         var upgraded = false
 
         try {
             while (true) {
-                val event = queue.poll() ?: run { current?.flush(); queue.receiveOrNull() } ?: break
+                val event = queue.poll()
+                    ?: run { current?.flush(); @Suppress("DEPRECATION") queue.receiveOrNull() }
+                    ?: break
 
                 if (event is ByteBufHolder) {
                     val channel = current ?: throw IllegalStateException("No current channel but received a byte buf")
@@ -101,6 +109,7 @@ internal class RequestBodyHandler(val context: ChannelHandlerContext,
         }
     }
 
+    @UseExperimental(ExperimentalCoroutinesApi::class)
     private fun consumeAndReleaseQueue() {
         while (!queue.isEmpty) {
             val e = try { queue.poll() } catch (t: Throwable) { null } ?: break
@@ -128,13 +137,16 @@ internal class RequestBodyHandler(val context: ChannelHandlerContext,
         }
     }
 
+    @Suppress("OverridingDeprecatedMember")
     override fun exceptionCaught(ctx: ChannelHandlerContext?, cause: Throwable) {
+        handlerJob.cancel(cause)
         queue.close(cause)
     }
 
     override fun handlerRemoved(ctx: ChannelHandlerContext?) {
         if (queue.close() && job.isCompleted) {
             consumeAndReleaseQueue()
+            handlerJob.cancel()
         }
     }
 

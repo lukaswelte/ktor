@@ -2,17 +2,44 @@ package io.ktor.client.engine
 
 import io.ktor.client.call.*
 import io.ktor.client.request.*
-import java.io.*
+import kotlinx.coroutines.*
+import kotlinx.io.core.*
 
+/**
+ * Base interface use to define engines for [HttpClient].
+ */
+interface HttpClientEngine : CoroutineScope, Closeable {
 
-interface HttpClientEngine : Closeable {
-    fun prepareRequest(builder: HttpRequestBuilder, call: HttpClientCall): HttpRequest
+    /**
+     * [CoroutineDispatcher] specified for io operations.
+     */
+    val dispatcher: CoroutineDispatcher
+
+    /**
+     * Engine configuration
+     */
+    val config: HttpClientEngineConfig
+
+    /**
+     * Creates a new [HttpClientCall] specific for this engine, using a request [data].
+     */
+    suspend fun execute(call: HttpClientCall, data: HttpRequestData): HttpEngineCall
 }
 
+/**
+ * Factory of [HttpClientEngine] with a specific [T] of [HttpClientEngineConfig].
+ */
 interface HttpClientEngineFactory<out T : HttpClientEngineConfig> {
+    /**
+     * Creates a new [HttpClientEngine] optionally specifying a [block] configuring [T].
+     */
     fun create(block: T.() -> Unit = {}): HttpClientEngine
 }
 
+/**
+ * Creates a new [HttpClientEngineFactory] based on this one
+ * with further configurations from the [nested] block.
+ */
 fun <T : HttpClientEngineConfig> HttpClientEngineFactory<T>.config(nested: T.() -> Unit): HttpClientEngineFactory<T> {
     val parent = this
 

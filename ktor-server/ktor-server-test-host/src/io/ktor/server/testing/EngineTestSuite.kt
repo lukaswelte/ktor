@@ -1,39 +1,43 @@
 package io.ktor.server.testing
 
 import io.ktor.application.*
-import io.ktor.cio.*
+import io.ktor.util.cio.*
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.client.response.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.features.*
 import io.ktor.http.*
+import io.ktor.http.Headers
 import io.ktor.http.cio.*
 import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.engine.*
 import io.ktor.util.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
-import kotlinx.coroutines.experimental.io.jvm.javaio.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
+import kotlinx.coroutines.io.jvm.javaio.*
+import kotlinx.io.core.*
 import kotlinx.io.streams.*
-import org.junit.Test
 import org.junit.runners.model.*
 import org.slf4j.*
 import java.io.*
 import java.net.*
 import java.nio.ByteBuffer
-import java.security.*
 import java.util.*
 import java.util.concurrent.*
 import java.util.concurrent.atomic.*
 import java.util.zip.*
 import kotlin.concurrent.*
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 import kotlin.test.*
+import kotlin.test.Test
 
-abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : ApplicationEngine.Configuration>(hostFactory: ApplicationEngineFactory<TEngine, TConfiguration>) : EngineTestBase<TEngine, TConfiguration>(hostFactory) {
+@Suppress("KDocMissingDocumentation")
+abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : ApplicationEngine.Configuration>(
+        hostFactory: ApplicationEngineFactory<TEngine, TConfiguration>
+) : EngineTestBase<TEngine, TConfiguration>(hostFactory) {
     @Test
     fun testTextContent() {
         createAndStartServer {
@@ -54,18 +58,10 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
             val contentType = fields.getAll(HttpHeaders.ContentType)?.single()
             fields.remove(HttpHeaders.ContentType)
             assertNotNull(contentType) // Content-Type should be present
-            val parsedContentType = ContentType.parse(contentType!!) // It should parse
+            val parsedContentType = ContentType.parse(contentType) // It should parse
             assertEquals(ContentType.Text.Plain.withCharset(Charsets.UTF_8), parsedContentType)
 
-            if (version == HttpProtocolVersion.HTTP_2_0) {
-                assertEquals(mapOf(
-                        "content-length" to listOf("4")), fields.build().toMap())
-            } else {
-                assertEquals(mapOf(
-                        "Connection" to listOf("keep-alive"),
-                        "Content-Length" to listOf("4")), fields.build().toMap())
-            }
-
+            assertEquals("4", headers[HttpHeaders.ContentLength])
             assertEquals("test", readText())
         }
     }
@@ -89,7 +85,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
     fun testStream() {
         createAndStartServer {
             handle {
-                call.respondWrite {
+                call.respondTextWriter {
                     write("ABC")
                     flush()
                     write("123")
@@ -105,8 +101,27 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
     }
 
     @Test
+    fun testBinary() {
+        createAndStartServer {
+            handle {
+                call.respondOutputStream {
+                    write(25)
+                    write(37)
+                    write(42)
+                }
+            }
+        }
+
+        withUrl("/") {
+            assertEquals(200, status.value)
+            assertEquals(ContentType.Application.OctetStream, contentType())
+            assertTrue(Arrays.equals(byteArrayOf(25, 37, 42), readBytes()))
+        }
+    }
+
+    @Test
     fun testLoggerOnError() {
-        val message = "expected, ${nextNonce()}"
+        val message = "expected, ${Random().nextLong()}"
         val collected = LinkedBlockingQueue<Throwable>()
 
         val log = object : Logger by LoggerFactory.getLogger("ktor.test") {
@@ -122,7 +137,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
                 throw ExpectedException(message)
             }
             get("/respondWrite") {
-                call.respondWrite {
+                call.respondTextWriter {
                     throw ExpectedException(message)
                 }
             }
@@ -166,8 +181,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
 
         withUrl("/", {
             method = HttpMethod.Post
-            header(HttpHeaders.ContentType, ContentType.Application.FormUrlEncoded.toString())
-            body = parametersOf("a", "1").formUrlEncode()
+            body = TextContent(parametersOf("a", "1").formUrlEncode(), ContentType.Application.FormUrlEncoded)
         }) {
             assertEquals(200, status.value)
             assertEquals("a=1", readText())
@@ -182,7 +196,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
     fun testStreamNoFlush() {
         createAndStartServer {
             handle {
-                call.respondWrite {
+                call.respondTextWriter {
                     write("ABC")
                     write("123")
                 }
@@ -226,7 +240,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
     @Test
     fun testRedirectFromInterceptor() {
         createAndStartServer {
-            application.intercept(ApplicationCallPipeline.Infrastructure) {
+            application.intercept(ApplicationCallPipeline.Features) {
                 call.respondRedirect("/2", true)
             }
         }
@@ -389,6 +403,31 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
     }
 
     @Test
+    fun testStreamingContentWithCompression() {
+        val file = listOf(File("src"), File("ktor-server/ktor-server-core/src")).first { it.exists() }.walkBottomUp().filter { it.extension == "kt" }.first()
+        testLog.trace("test file is $file")
+
+        createAndStartServer {
+            application.install(Compression)
+            handle {
+                call.respond(object: OutgoingContent.WriteChannelContent() {
+                    override suspend fun writeTo(channel: ByteWriteChannel) {
+                        channel.writeStringUtf8("Hello!")
+                    }
+                })
+            }
+        }
+
+        withUrl("/", {
+            header(HttpHeaders.AcceptEncoding, "gzip")
+        }) {
+            assertEquals(200, status.value)
+            assertEquals("Hello!", GZIPInputStream(content.toInputStream()).reader().use { it.readText() })
+            assertEquals("gzip", headers[HttpHeaders.ContentEncoding])
+        }
+    }
+
+    @Test
     fun testLocalFileContentRange() {
         val file = listOf(File("src"), File("ktor-server/ktor-server-core/src")).first { it.exists() }.walkBottomUp().filter { it.extension == "kt" && it.reader().use { it.read().toChar() == 'p' } }.first()
         testLog.trace("test file is $file")
@@ -538,8 +577,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
 
         withUrl("/?urlp=1", {
             method = HttpMethod.Post
-            header(HttpHeaders.ContentType, ContentType.Application.FormUrlEncoded.toString())
-            body = ByteArrayContent("formp=2".toByteArray())
+            body = ByteArrayContent("formp=2".toByteArray(), ContentType.Application.FormUrlEncoded)
         }) {
             assertEquals(HttpStatusCode.OK.value, status.value)
             assertEquals("1,2", readText())
@@ -584,7 +622,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
 
         withUrl("/", {
             method = HttpMethod.Post
-            header(HttpHeaders.ContentType, ContentType.Text.Plain.toString())
+//            header(HttpHeaders.ContentType, ContentType.Text.Plain.toString())
             body = ByteArrayContent("POST content".toByteArray())
         }) {
             assertEquals(200, status.value)
@@ -602,7 +640,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
                 call.receiveMultipart().readAllParts().sortedBy { it.name }.forEach { part ->
                     when (part) {
                         is PartData.FormItem -> response.append("${part.name}=${part.value}\n")
-                        is PartData.FileItem -> response.append("file:${part.name},${part.originalFileName},${part.streamProvider().bufferedReader().readText()}\n")
+                        is PartData.FileItem -> response.append("file:${part.name},${part.originalFileName},${part.provider().readText()}\n")
                     }
 
                     part.dispose()
@@ -634,6 +672,57 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
         }) {
             assertEquals(200, status.value)
             assertEquals("a story=Hi user. The snake you gave me for free ate all the birds. Please take it back ASAP.\nfile:attachment,original.txt,File content goes here\n", readText())
+        }
+    }
+
+    @Test
+    @NoHttp2
+    fun testMultipartFileUploadLarge() {
+        val numberOfLines = 10000
+
+        createAndStartServer {
+            post("/") {
+                val response = StringBuilder()
+
+                call.receiveMultipart().forEachPart { part ->
+                    when (part) {
+                        is PartData.FormItem -> response.append("${part.name}=${part.value}\n")
+                        is PartData.FileItem -> response.append("file:${part.name},${part.originalFileName},${part.streamProvider().bufferedReader().lineSequence().count()}\n")
+                    }
+
+                    part.dispose()
+                }
+
+                call.respondText(response.toString())
+            }
+        }
+
+        withUrl("/", {
+            method = HttpMethod.Post
+            val contentType = ContentType.MultiPart.FormData
+                    .withParameter("boundary", "***bbb***")
+                    .withCharset(Charsets.ISO_8859_1)
+
+            body = WriterContent({
+                append("--***bbb***\r\n")
+                append("Content-Disposition: form-data; name=\"a story\"\r\n")
+                append("\r\n")
+                append("Hi user. The snake you gave me for free ate all the birds. Please take it back ASAP.\r\n")
+                append("--***bbb***\r\n")
+                append("Content-Disposition: form-data; name=\"attachment\"; filename=\"original.txt\"\r\n")
+                append("Content-Type: text/plain\r\n")
+                append("\r\n")
+                withContext(coroutineContext) {
+                    repeat(numberOfLines) {
+                        append("File content goes here\r\n")
+                    }
+                }
+                append("--***bbb***--\r\n")
+                flush()
+            }, contentType)
+        }) {
+            assertEquals(200, status.value)
+            assertEquals("a story=Hi user. The snake you gave me for free ate all the birds. Please take it back ASAP.\nfile:attachment,original.txt,$numberOfLines\n", readText())
         }
     }
 
@@ -687,7 +776,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
         createAndStartServer {
             get("/") {
                 val d = call.request.queryParameters["d"]!!.toLong()
-                delay(d, TimeUnit.SECONDS)
+                delay(TimeUnit.SECONDS.toMillis(d))
 
                 call.response.header("D", d.toString())
                 call.respondText("Response for $d\n")
@@ -710,7 +799,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
         }.toByteArray()
 
         s.connect(InetSocketAddress(port))
-        s.use {
+        s.use { _ ->
             s.getOutputStream().apply {
                 write(impudent)
                 flush()
@@ -750,6 +839,23 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
     }
 
     @Test
+    fun testReceiveInputStream() {
+        createAndStartServer {
+            post("/") {
+                call.respond(call.receive<InputStream>().reader().readText())
+            }
+        }
+
+        withUrl("/", {
+            method = HttpMethod.Post
+            body = "Hello"
+        }) {
+            assertEquals(200, status.value)
+            assertEquals("Hello", readText())
+        }
+    }
+
+    @Test
     fun testRepeatRequest() {
         createAndStartServer {
             get("/") {
@@ -775,8 +881,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
 
         withUrl("/", {
             method = HttpMethod.Post
-            header(HttpHeaders.ContentType, ContentType.Text.Plain.toString())
-            body = ByteArrayContent("Hello".toByteArray())
+            body = ByteArrayContent("Hello".toByteArray(), ContentType.Text.Plain)
         }) {
             assertEquals(200, status.value)
             assertEquals("Hello", readText())
@@ -831,7 +936,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
     @Test
     fun testProxyHeaders() {
         createAndStartServer {
-            install(XForwardedHeadersSupport)
+            install(XForwardedHeaderSupport)
             get("/") {
                 call.respond(call.url { })
             }
@@ -949,7 +1054,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
         createAndStartServer {
             get("/{index}") {
                 val index = call.parameters["index"]!!.toInt()
-                call.respondWrite {
+                call.respondTextWriter {
                     //print("[$index] ")
                     try {
                         append("OK:$index\n")
@@ -1019,7 +1124,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
             }
         }
 
-        val originalSha1WithSize = file.inputStream().use { it.sha1WithSize() }
+        val originalSha1WithSize = file.inputStream().use { it.crcWithSize() }
 
         createAndStartServer {
             get("/file") {
@@ -1028,7 +1133,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
         }
 
         withUrl("/file") {
-            assertEquals(originalSha1WithSize, content.toInputStream().sha1WithSize())
+            assertEquals(originalSha1WithSize, content.toInputStream().crcWithSize())
         }
     }
 
@@ -1048,7 +1153,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
             }
         }
 
-        val originalSha1WithSize = file.inputStream().use { it.sha1WithSize() }
+        val originalSha1WithSize = file.inputStream().use { it.crcWithSize() }
 
         createAndStartServer {
             get("/file") {
@@ -1061,7 +1166,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
         connection.readTimeout = 10_000
 
         try {
-            assertEquals(originalSha1WithSize, connection.inputStream.sha1WithSize())
+            assertEquals(originalSha1WithSize, connection.inputStream.crcWithSize())
         } finally {
             connection.disconnect()
         }
@@ -1076,11 +1181,13 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
                 try {
                     call.respond(object : OutgoingContent.WriteChannelContent() {
                         override suspend fun writeTo(channel: ByteWriteChannel) {
-                            val bb = ByteBuffer.allocate(100)
+                            val bb = ByteBuffer.allocate(512)
                             for (i in 1L..1000L) {
                                 delay(100)
                                 bb.clear()
-                                bb.putLong(i)
+                                while (bb.hasRemaining()) {
+                                    bb.putLong(i)
+                                }
                                 bb.flip()
                                 channel.writeFully(bb)
                                 channel.flush()
@@ -1106,12 +1213,63 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
             outputStream.flush()
 
             inputStream.read(ByteArray(100))
-            shutdownInput()
-            shutdownOutput()
-        }
+        } // send FIN
 
         runBlocking {
-            withTimeout(1000L, TimeUnit.SECONDS) {
+            withTimeout(5000L) {
+                completed.join()
+            }
+        }
+    }
+
+    @Test
+    fun testConnectionReset() {
+        val completed = Job()
+
+        createAndStartServer {
+            get("/file") {
+                try {
+                    call.respond(object : OutgoingContent.WriteChannelContent() {
+                        override suspend fun writeTo(channel: ByteWriteChannel) {
+                            val bb = ByteBuffer.allocate(512)
+                            for (i in 1L..1000L) {
+                                delay(100)
+                                bb.clear()
+                                while (bb.hasRemaining()) {
+                                    bb.putLong(i)
+                                }
+                                bb.flip()
+                                channel.writeFully(bb)
+                                channel.flush()
+                            }
+
+                            channel.close()
+                        }
+                    })
+                } finally {
+                    completed.cancel()
+                }
+            }
+        }
+
+        socket {
+            // to ensure immediate RST at close it is very important to set SO_LINGER = 0
+            setSoLinger(true, 0)
+
+            outputStream.writePacket(RequestResponseBuilder().apply {
+                requestLine(HttpMethod.Get, "/file", "HTTP/1.1")
+                headerLine("Host", "localhost:$port")
+                headerLine("Connection", "keep-alive")
+                emptyLine()
+            }.build())
+
+            outputStream.flush()
+
+            inputStream.read(ByteArray(100))
+        }  // send FIN + RST
+
+        runBlocking {
+            withTimeout(5000L) {
                 completed.join()
             }
         }
@@ -1122,7 +1280,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
         createAndStartServer {
             application.install(StatusPages) {
                 status(HttpStatusCode.NotFound) {
-                    call.respondWrite(ContentType.parse("text/html"), HttpStatusCode.NotFound) {
+                    call.respondTextWriter(ContentType.parse("text/html"), HttpStatusCode.NotFound) {
                         write("Error string")
                     }
                 }
@@ -1139,7 +1297,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
     open fun testBlockingDeadlock() {
         createAndStartServer {
             get("/") {
-                call.respondWrite(ContentType.Text.Plain.withCharset(Charsets.ISO_8859_1)) {
+                call.respondTextWriter(ContentType.Text.Plain.withCharset(Charsets.ISO_8859_1)) {
                     TimeUnit.SECONDS.sleep(1)
                     this.write("Deadlock ?")
                 }
@@ -1417,7 +1575,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
                                 append(HttpHeaders.ContentLength, doubleSize)
                             }
 
-                        suspend override fun writeTo(channel: ByteWriteChannel) {
+                        override suspend fun writeTo(channel: ByteWriteChannel) {
                             channel.writeFully(data)
                             channel.close()
                         }
@@ -1432,7 +1590,7 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
                                 append(HttpHeaders.ContentLength, halfSize)
                             }
 
-                        suspend override fun writeTo(channel: ByteWriteChannel) {
+                        override suspend fun writeTo(channel: ByteWriteChannel) {
                             channel.writeFully(data)
                             channel.close()
                         }
@@ -1466,11 +1624,101 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
         }
     }
 
+    @Test
+    fun testIgnorePostContent(): Unit = runBlocking {
+        createAndStartServer {
+            post("/") {
+                call.respondText("OK")
+            }
+        }
+
+        socket {
+            val bodySize = 65536
+            val repeatCount = 10
+            val body = "X".repeat(bodySize).toByteArray()
+
+            coroutineScope {
+                launch(CoroutineName("writer") + testDispatcher) {
+                    RequestResponseBuilder().apply {
+                        requestLine(HttpMethod.Post, "/", HttpProtocolVersion.HTTP_1_1.toString())
+                        headerLine(HttpHeaders.Host, "localhost:$port")
+                        headerLine(HttpHeaders.Connection, "keep-alive")
+                        headerLine(HttpHeaders.ContentType, ContentType.Text.Plain.toString())
+                        headerLine(HttpHeaders.ContentLength, body.size.toString())
+                        emptyLine()
+                    }.build().use { request ->
+                        repeat(repeatCount) {
+                            getOutputStream().writePacket(request.copy())
+                            getOutputStream().write(body)
+                            getOutputStream().flush()
+                        }
+                    }
+                }
+
+                launch(CoroutineName("reader") + testDispatcher) {
+                    use {
+                        val channel = getInputStream().toByteReadChannel(context = testDispatcher)
+
+                        repeat(repeatCount) { requestNumber ->
+                            parseResponse(channel)?.use { response ->
+                                assertEquals(200, response.status)
+                                val contentLength = response.headers[HttpHeaders.ContentLength].toString().toLong()
+                                channel.discardExact(contentLength)
+                                response.release()
+                            } ?: fail("No response found for request #$requestNumber")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testApplicationScopeCancellation() {
+        var job: Job? = null
+
+        createAndStartServer {
+            job = application.launch {
+                delay(10000000L)
+            }
+        }
+
+        server!!.stop(1, 10, TimeUnit.SECONDS)
+        assertNotNull(job)
+        assertTrue { job!!.isCancelled }
+    }
+
+    @Test
+    fun testEmbeddedServerCancellation() {
+        val parent = Job()
+
+        createAndStartServer(parent = parent) {
+            get("/") { call.respondText("OK") }
+        }
+
+        withUrl("/") {
+            // ensure the server is running
+            assertEquals("OK", call.receive<String>())
+        }
+
+        parent.cancel()
+
+        runBlocking {
+            withTimeout(5000L) {
+                parent.join()
+            }
+        }
+
+        assertFailsWith<IOException> { // ensure that the server is not running anymore
+            withUrl("/") { call.receive<String>() }
+        }
+    }
+
     private fun String.urlPath() = replace("\\", "/")
     private class ExpectedException(message: String) : RuntimeException(message)
 
-    private fun InputStream.sha1WithSize(): Pair<String, Long> {
-        val md = MessageDigest.getInstance("SHA1")
+    private fun InputStream.crcWithSize(): Pair<Long, Long> {
+        val checksum = CRC32()
         val bytes = ByteArray(8192)
         var count = 0L
 
@@ -1480,14 +1728,14 @@ abstract class EngineTestSuite<TEngine : ApplicationEngine, TConfiguration : App
                 break
             }
             count += rc
-            md.update(bytes, 0, rc)
+            checksum.update(bytes, 0, rc)
         } while (true)
 
-        return hex(md.digest()) to count
+        return checksum.value to count
     }
 
     companion object {
-        val classesDir = "build/classes/kotlin/main"
-        val coreClassesDir = "ktor-server/ktor-server-core/${classesDir}"
+        const val classesDir = "build/classes/kotlin/main"
+        const val coreClassesDir = "ktor-server/ktor-server-core/${classesDir}"
     }
 }

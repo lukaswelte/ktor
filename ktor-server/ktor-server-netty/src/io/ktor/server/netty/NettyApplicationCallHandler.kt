@@ -1,15 +1,15 @@
 package io.ktor.server.netty
 
 import io.ktor.application.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.server.engine.*
 import io.netty.channel.*
-import kotlinx.coroutines.experimental.*
-import kotlin.coroutines.experimental.*
+import kotlinx.coroutines.*
+import kotlin.coroutines.*
 
 internal class NettyApplicationCallHandler(userCoroutineContext: CoroutineContext,
-                                           private val enginePipeline: EnginePipeline) : ChannelInboundHandlerAdapter() {
-    private val handleCoroutineContext = userCoroutineContext + CoroutineName("call-handler")
+                                           private val enginePipeline: EnginePipeline) : ChannelInboundHandlerAdapter(), CoroutineScope {
+    override val coroutineContext: CoroutineContext = userCoroutineContext
 
     override fun channelRead(ctx: ChannelHandlerContext, msg: Any) {
         when (msg) {
@@ -19,8 +19,12 @@ internal class NettyApplicationCallHandler(userCoroutineContext: CoroutineContex
     }
 
     private fun handleRequest(context: ChannelHandlerContext, call: ApplicationCall) {
-        launch(handleCoroutineContext + NettyDispatcher.CurrentContext(context), start = CoroutineStart.UNDISPATCHED) {
+        launch(CallHandlerCoroutineName + NettyDispatcher.CurrentContext(context), start = CoroutineStart.UNDISPATCHED) {
             enginePipeline.execute(call)
         }
+    }
+
+    companion object {
+        private val CallHandlerCoroutineName = CoroutineName("call-handler")
     }
 }

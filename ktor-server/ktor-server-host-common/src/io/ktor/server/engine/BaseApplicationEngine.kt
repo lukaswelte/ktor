@@ -11,8 +11,10 @@ import io.ktor.application.*
  * @param environment instance of [ApplicationEngineEnvironment] for this engine
  * @param pipeline pipeline to use with this engine
  */
-abstract class BaseApplicationEngine(final override val environment: ApplicationEngineEnvironment,
-                                     val pipeline: EnginePipeline = defaultEnginePipeline(environment)
+@EngineAPI
+abstract class BaseApplicationEngine(
+    final override val environment: ApplicationEngineEnvironment,
+    val pipeline: EnginePipeline = defaultEnginePipeline(environment)
 ) : ApplicationEngine {
 
     /**
@@ -30,6 +32,10 @@ abstract class BaseApplicationEngine(final override val environment: Application
             it.receivePipeline.installDefaultTransformations()
             it.sendPipeline.installDefaultTransformations()
         }
+        environment.monitor.subscribe(ApplicationStarted) {
+            environment.connectors.forEach {
+                environment.log.info("Responding at ${it.type.name.toLowerCase()}://${it.host}:${it.port}")
+            }
+        }
     }
-
 }

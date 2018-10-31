@@ -2,18 +2,21 @@ package io.ktor.server.netty
 
 import io.ktor.application.*
 import io.ktor.server.engine.*
+import io.ktor.util.*
 import io.netty.channel.*
 import io.netty.util.*
-import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.*
 
-internal abstract class NettyApplicationCall(application: Application,
+@Suppress("KDocMissingDocumentation")
+@InternalAPI
+abstract class NettyApplicationCall(application: Application,
                                     val context: ChannelHandlerContext,
                                     private val requestMessage: Any) : BaseApplicationCall(application) {
 
     abstract override val request: NettyApplicationRequest
     abstract override val response: NettyApplicationResponse
 
-    internal val responseWriteJob = Job()
+    val responseWriteJob: Job = Job()
 
     internal suspend fun finish() {
         try {

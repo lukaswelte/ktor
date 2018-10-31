@@ -6,16 +6,15 @@ import io.ktor.client.engine.*
 import io.ktor.client.request.*
 import io.ktor.client.response.*
 import io.ktor.client.tests.utils.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.engine.*
 import io.ktor.server.jetty.*
-import kotlinx.coroutines.experimental.*
-import org.junit.*
-import org.junit.Assert.*
+import kotlinx.coroutines.*
 import java.util.concurrent.*
 import java.util.concurrent.atomic.*
+import kotlin.test.*
 
 
 private const val TEST_SIZE = 100_000
@@ -36,7 +35,7 @@ abstract class MultithreadedTest(private val factory: HttpClientEngineFactory<*>
     }
 
     @Test
-    fun numberTest() {
+    fun numberTest() = runBlocking {
         val client = HttpClient(factory)
         val result = withPool {
             val response = client.get<HttpResponse>("http://127.0.0.1:$serverPort")
@@ -52,9 +51,9 @@ abstract class MultithreadedTest(private val factory: HttpClientEngineFactory<*>
 }
 
 private fun <T> withPool(
-        threads: Int = DEFAULT_THREADS_COUNT,
-        testSize: Int = TEST_SIZE,
-        block: suspend () -> T
+    threads: Int = DEFAULT_THREADS_COUNT,
+    testSize: Int = TEST_SIZE,
+    block: suspend () -> T
 ): List<T> {
     val pool = Executors.newFixedThreadPool(threads)
     val result = List(testSize) {

@@ -1,16 +1,18 @@
 package io.ktor.tests.server.features
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.features.*
 import io.ktor.http.*
 import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.testing.*
-import kotlinx.coroutines.experimental.io.*
+import io.ktor.util.*
+import kotlinx.coroutines.io.*
 import org.junit.Test
 import java.time.*
 import java.util.zip.*
+import kotlin.coroutines.*
 import kotlin.test.*
 
 class CompressionTest {
@@ -124,8 +126,15 @@ class CompressionTest {
             application.install(Compression) {
                 default()
                 encoder("special", object : CompressionEncoder {
-                    override fun compress(readChannel: ByteReadChannel) = readChannel
-                    override fun compress(writeChannel: ByteWriteChannel) = writeChannel
+                    override fun compress(
+                        readChannel: ByteReadChannel,
+                        coroutineContext: CoroutineContext
+                    ) = readChannel
+
+                    override fun compress(
+                        writeChannel: ByteWriteChannel,
+                        coroutineContext: CoroutineContext
+                    ) = writeChannel
                 })
             }
             application.routing {
@@ -326,7 +335,7 @@ class CompressionTest {
 
     @Test
     fun testWithConditionalHeaders() {
-        val dateTime = LocalDateTime.now()
+        val dateTime = ZonedDateTime.now(GreenwichMeanTime)
 
         withTestApplication {
             application.install(ConditionalHeaders)
@@ -416,7 +425,7 @@ class CompressionTest {
             application.install(Compression)
             application.routing {
                 get("/") {
-                    call.respondWrite {
+                    call.respondTextWriter {
                         write("test ")
                         write("me")
                     }
@@ -425,6 +434,44 @@ class CompressionTest {
 
             handleAndAssert("/", "gzip", "gzip", "test me")
         }
+    }
+
+    @Test
+    fun testCompressionRespondBytes(): Unit = withTestApplication {
+        application.install(Compression)
+
+        application.routing {
+            get("/") {
+                call.respond(object: OutgoingContent.WriteChannelContent() {
+                    override suspend fun writeTo(channel: ByteWriteChannel) {
+                        channel.writeStringUtf8("Hello!")
+                    }
+                })
+            }
+        }
+
+        handleAndAssert("/", "gzip", "gzip", "Hello!")
+    }
+
+    @Test
+    fun testCompressionRespondObjectWithIdentity(): Unit = withTestApplication {
+        application.install(Compression)
+
+        application.routing {
+            get("/") {
+                call.respond(object: OutgoingContent.ByteArrayContent() {
+                    override val headers: Headers
+                        get() = Headers.build {
+                            appendAll(super.headers)
+                            append(HttpHeaders.ContentEncoding, "identity")
+                        }
+
+                    override fun bytes(): ByteArray = "Hello!".toByteArray()
+                })
+            }
+        }
+
+        handleAndAssert("/", "gzip", "identity", "Hello!")
     }
 
     private fun TestApplicationEngine.handleAndAssert(url: String, acceptHeader: String?, expectedEncoding: String?, expectedContent: String): TestApplicationCall {
@@ -440,7 +487,8 @@ class CompressionTest {
             when (expectedEncoding) {
                 "gzip" -> assertEquals(expectedContent, result.response.readGzip())
                 "deflate" -> assertEquals(expectedContent, result.response.readDeflate())
-                else -> fail("unknown encoding $expectedContent")
+                "identity" -> assertEquals(expectedContent, result.response.readIdentity())
+                else -> fail("unknown encoding $expectedEncoding")
             }
         } else {
             assertNull(result.response.headers[HttpHeaders.ContentEncoding], "content shouldn't be compressed")
@@ -451,6 +499,7 @@ class CompressionTest {
         return result
     }
 
+    private fun TestApplicationResponse.readIdentity() = byteContent!!.inputStream().reader().readText()
     private fun TestApplicationResponse.readDeflate() = InflaterInputStream(byteContent!!.inputStream(), Inflater(true)).reader().readText()
     private fun TestApplicationResponse.readGzip() = GZIPInputStream(byteContent!!.inputStream()).reader().readText()
 }

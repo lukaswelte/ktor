@@ -1,11 +1,12 @@
 package io.ktor.tests.websocket
 
+import io.ktor.http.cio.websocket.*
 import io.ktor.util.*
-import io.ktor.websocket.*
 import org.junit.Test
 import java.nio.*
 import kotlin.test.*
 
+@UseExperimental(WebSocketInternalAPI::class)
 class ParserTest {
     @Test
     fun testParserSimpleFrame() {

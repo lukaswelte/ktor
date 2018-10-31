@@ -42,13 +42,13 @@ class HandlerTest {
     @Test fun `application with handler that checks body on POST method`() = withTestApplication {
         application.intercept(ApplicationCallPipeline.Call) {
             if (call.request.httpMethod == HttpMethod.Post) {
-                assertEquals(call.receive<String>(), "Body")
+                assertEquals("Body", call.receive())
                 call.respond(HttpStatusCode.OK)
             }
         }
         val call = handleRequest {
             method = HttpMethod.Post
-            body = "Body"
+            setBody("Body")
         }
         assertTrue(call.requestHandled)
     }

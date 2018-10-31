@@ -10,16 +10,23 @@ import io.netty.channel.*
 import io.netty.handler.codec.http2.*
 import io.netty.util.*
 import io.netty.util.concurrent.*
-import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.*
 import java.lang.reflect.*
 import java.nio.channels.*
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 
 @ChannelHandler.Sharable
-internal class NettyHttp2Handler(private val enginePipeline: EnginePipeline,
-                                 private val application: Application,
-                                 private val callEventGroup: EventExecutorGroup,
-                                 private val userCoroutineContext: CoroutineContext) : ChannelInboundHandlerAdapter() {
+internal class NettyHttp2Handler(
+    private val enginePipeline: EnginePipeline,
+    private val application: Application,
+    private val callEventGroup: EventExecutorGroup,
+    private val userCoroutineContext: CoroutineContext
+) : ChannelInboundHandlerAdapter(), CoroutineScope {
+    private val handlerJob = Job()
+
+    override val coroutineContext: CoroutineContext
+        get() = handlerJob
+
     override fun channelRead(context: ChannelHandlerContext, message: Any?) {
         when (message) {
             is Http2HeadersFrame -> {
@@ -52,15 +59,29 @@ internal class NettyHttp2Handler(private val enginePipeline: EnginePipeline,
         }
     }
 
+    @Suppress("OverridingDeprecatedMember")
     override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
+        handlerJob.cancel(cause)
         ctx.close()
     }
 
-    private fun startHttp2(context: ChannelHandlerContext, headers: Http2Headers) {
-        val requestQueue = NettyRequestQueue(1)
-        val responseWriter = NettyResponsePipeline(context, WriterEncapsulation.Http2, requestQueue)
+    override fun handlerRemoved(ctx: ChannelHandlerContext?) {
+        super.handlerRemoved(ctx)
+        handlerJob.cancel()
+    }
 
-        val call = NettyHttp2ApplicationCall(application, context, headers, this, Unconfined, userCoroutineContext)
+    private fun startHttp2(context: ChannelHandlerContext, headers: Http2Headers) {
+        val requestQueue = NettyRequestQueue(1, 1)
+        val responseWriter = NettyResponsePipeline(context, WriterEncapsulation.Http2, requestQueue, handlerJob)
+
+        val call = NettyHttp2ApplicationCall(
+            application,
+            context,
+            headers,
+            this,
+            handlerJob + Dispatchers.Unconfined,
+            userCoroutineContext
+        )
         context.applicationCall = call
 
         requestQueue.schedule(call)
@@ -89,9 +110,9 @@ internal class NettyHttp2Handler(private val enginePipeline: EnginePipeline,
                 parameters.build().formUrlEncodeTo(this)
             }
 
-            scheme(builder.url.protocol.name)
             method(builder.method.value)
             authority(builder.url.host + ":" + builder.url.port)
+            scheme(builder.url.protocol.name)
             path(pathAndQuery)
         }
 

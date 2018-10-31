@@ -59,21 +59,24 @@ class URLBuilderTest {
     fun testPort() {
         assertEquals("http://localhost/", url { port = 80 })
         assertEquals("http://localhost:8080/", url { port = 8080 })
-        assertEquals("https://localhost:80/", url { protocol = URLProtocol.HTTPS })
+        assertEquals("https://localhost:80/", url { protocol = URLProtocol.HTTPS; port = 80 })
         assertEquals("https://localhost/", url { protocol = URLProtocol.HTTPS; port = 443 })
+        assertEquals("https://localhost/", url { protocol = URLProtocol.HTTPS })
     }
 
     @Test
     fun testUserCredentials() {
-        assertEquals("http://user:pass@localhost/", url { user = "user"; password= "pass" })
-        assertEquals("http://user%20name:pass+@localhost/", url { user = "user name"; password = "pass+" })
+        assertEquals("http://user:pass@localhost/", url { user = "user"; password = "pass" })
+        assertEquals("http://user%20name:pass%2B@localhost/", url { user = "user name"; password = "pass+" })
     }
 
     @Test
     fun testParameters() {
         assertEquals("http://localhost/?p1=v1", url { parameters.append("p1", "v1") })
         assertEquals("http://localhost/?p1=v1&p1=v2", url { parameters.appendAll("p1", listOf("v1", "v2")) })
-        assertEquals("http://localhost/?p1=v1&p2=v2", url { parameters.append("p1", "v1"); parameters.append("p2", "v2") })
+        assertEquals(
+            "http://localhost/?p1=v1&p2=v2",
+            url { parameters.append("p1", "v1"); parameters.append("p2", "v2") })
     }
 
     @Test
@@ -134,6 +137,21 @@ class URLBuilderTest {
     }
 
     @Test
+    fun testWithApplication2() {
+        withTestApplication {
+            application.intercept(ApplicationCallPipeline.Call) {
+                repeat(3) {
+                    assertEquals("http://my-host/?p=v", call.url())
+                }
+            }
+
+            handleRequest(HttpMethod.Get, "/?p=v") {
+                addHeader(HttpHeaders.Host, "my-host")
+            }
+        }
+    }
+
+    @Test
     fun testWithApplicationAndPort() {
         withTestApplication {
             application.intercept(ApplicationCallPipeline.Call) {
@@ -155,7 +173,7 @@ class URLBuilderTest {
     @Test
     fun testWithProxy() {
         withTestApplication {
-            application.install(XForwardedHeadersSupport)
+            application.install(XForwardedHeaderSupport)
             application.intercept(ApplicationCallPipeline.Call) {
                 assertEquals("http://special-host:90/", call.url())
             }
@@ -169,7 +187,7 @@ class URLBuilderTest {
     @Test
     fun testWithProxyHttps() {
         withTestApplication {
-            application.install(XForwardedHeadersSupport)
+            application.install(XForwardedHeaderSupport)
             application.intercept(ApplicationCallPipeline.Call) {
                 assertEquals("https://special-host:90/", call.url())
             }
@@ -184,7 +202,7 @@ class URLBuilderTest {
     @Test
     fun testWithProxyHttpsDefaultPort() {
         withTestApplication {
-            application.install(XForwardedHeadersSupport)
+            application.install(XForwardedHeaderSupport)
             application.intercept(ApplicationCallPipeline.Call) {
                 assertEquals("https://special-host/", call.url())
             }
@@ -199,7 +217,7 @@ class URLBuilderTest {
     @Test
     fun testWithProxyHttpsWithPortEqualToDefault() {
         withTestApplication {
-            application.install(XForwardedHeadersSupport)
+            application.install(XForwardedHeaderSupport)
             application.intercept(ApplicationCallPipeline.Call) {
                 assertEquals("https://special-host/", call.url())
             }

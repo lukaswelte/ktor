@@ -1,30 +1,55 @@
 package io.ktor.server.servlet
 
 import io.ktor.application.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.server.engine.*
 import io.ktor.util.*
-import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.*
+import java.lang.IllegalStateException
 import java.util.concurrent.*
 import javax.servlet.http.*
+import kotlin.coroutines.*
 
-abstract class KtorServlet : HttpServlet() {
+/**
+ * A base class for servlet engine implementations
+ */
+@EngineAPI
+@UseExperimental(InternalAPI::class)
+abstract class KtorServlet : HttpServlet(), CoroutineScope {
     private val asyncDispatchers = lazy { AsyncDispatchers() }
 
-    abstract val application: Application
-    abstract val enginePipeline: EnginePipeline
+    /**
+     * Current application instance. Could be lazy
+     */
+    protected abstract val application: Application
 
-    abstract val upgrade: ServletUpgrade
+    /**
+     * Engine pipeline
+     */
+    protected abstract val enginePipeline: EnginePipeline
 
+    /**
+     * Servlet upgrade implementation
+     */
+    protected abstract val upgrade: ServletUpgrade
+
+    override val coroutineContext: CoroutineContext  = Dispatchers.Unconfined + SupervisorJob() + CoroutineName("servlet")
+
+    /**
+     * Called by servlet container when the application is going to be undeployed or stopped.
+     */
     override fun destroy() {
+        coroutineContext.cancel()
         // Note: container will not call service again, so asyncDispatcher cannot get initialized if it was not yet
         if (asyncDispatchers.isInitialized()) asyncDispatchers.value.destroy()
     }
 
+    /**
+     * Called by the servlet container when an HTTP request received.
+     */
     override fun service(request: HttpServletRequest, response: HttpServletResponse) {
         if (response.isCommitted) return
-        response.characterEncoding = "UTF-8"
-        request.characterEncoding = "UTF-8"
+
         try {
             if (request.isAsyncSupported) {
                 asyncService(request, response)
@@ -41,21 +66,33 @@ abstract class KtorServlet : HttpServlet() {
         val asyncContext = request.startAsync()!!.apply {
             timeout = 0L
         }
-        val ad = asyncDispatchers.value
-        val call = AsyncServletApplicationCall(application, request, response,
-            engineContext = ad.engineDispatcher, userContext = ad.dispatcher, upgrade = upgrade)
-        launch(ad.dispatcher) {
+
+        val asyncDispatchers = asyncDispatchers.value
+
+        launch(asyncDispatchers.dispatcher) {
+            val call = AsyncServletApplicationCall(application, request, response,
+                engineContext = asyncDispatchers.engineDispatcher,
+                userContext = asyncDispatchers.dispatcher,
+                upgrade = upgrade,
+                parentCoroutineContext = coroutineContext
+            )
+
             try {
                 enginePipeline.execute(call)
             } finally {
-                asyncContext.complete()
+                try {
+                    asyncContext.complete()
+                } catch (alreadyCompleted: IllegalStateException) {
+                    application.log.debug("AsyncContext is already completed due to previous I/O error",
+                            alreadyCompleted)
+                }
             }
         }
     }
 
     private fun blockingService(request: HttpServletRequest, response: HttpServletResponse) {
-        runBlocking {
-            val call = BlockingServletApplicationCall(application, request, response)
+        runBlocking(coroutineContext) {
+            val call = BlockingServletApplicationCall(application, request, response, coroutineContext)
             enginePipeline.execute(call)
         }
     }

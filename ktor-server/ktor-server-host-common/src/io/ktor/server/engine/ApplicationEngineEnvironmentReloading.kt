@@ -3,17 +3,17 @@ package io.ktor.server.engine
 import io.ktor.application.*
 import io.ktor.config.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import org.slf4j.*
 import java.io.*
 import java.lang.reflect.*
 import java.net.*
-import java.net.URL
 import java.nio.file.*
 import java.nio.file.StandardWatchEventKinds.*
 import java.nio.file.attribute.*
 import java.util.concurrent.locks.*
 import kotlin.concurrent.*
+import kotlin.coroutines.*
 import kotlin.reflect.*
 import kotlin.reflect.full.*
 import kotlin.reflect.jvm.*
@@ -29,7 +29,8 @@ class ApplicationEngineEnvironmentReloading(
         override val config: ApplicationConfig,
         override val connectors: List<EngineConnectorConfig>,
         private val modules: List<Application.() -> Unit>,
-        private val watchPaths: List<String> = emptyList()
+        private val watchPaths: List<String> = emptyList(),
+        override val parentCoroutineContext: CoroutineContext = EmptyCoroutineContext
 ) : ApplicationEngineEnvironment {
 
     private var _applicationInstance: Application? = null
@@ -64,6 +65,9 @@ class ApplicationEngineEnvironmentReloading(
     override val application: Application
         get() = currentApplication()
 
+    /**
+     * Reload application: destroy it first and then create again
+     */
     fun reload() {
         applicationInstanceLock.write {
             destroyApplication()
@@ -141,7 +145,7 @@ class ApplicationEngineEnvironmentReloading(
         // because otherwise it loads two ApplicationEnvironment (and other) types which do not match
         val coreUrls = listOf(
                 ApplicationEnvironment::class.java, // ktor-server-core
-                Pipeline::class.java, // ktor-utils
+                Pipeline::class.java, // ktor-parsing
                 HttpStatusCode::class.java, // ktor-http
                 kotlin.jvm.functions.Function1::class.java // kotlin-stdlib
         ).mapTo(HashSet()) { it.protectionDomain.codeSource.location }
@@ -323,7 +327,12 @@ class ApplicationEngineEnvironmentReloading(
     }
 
     private fun <R> List<KFunction<R>>.bestFunction(): KFunction<R>? {
-        return sortedWith(compareBy({ it.parameters.count { !it.isOptional } }, { it.parameters.size })).lastOrNull()
+        return sortedWith(
+            compareBy(
+                { isApplication(it.parameters[0]) },
+                { it.parameters.count { !it.isOptional } },
+                { it.parameters.size }))
+            .lastOrNull()
     }
 
     private fun <R> callFunctionWithInjection(instance: Any?, entryPoint: KFunction<R>, application: Application): R {
@@ -339,8 +348,10 @@ class ApplicationEngineEnvironmentReloading(
                             if (p.type.toString().contains("Application")) {
                                 // It is possible that type is okay, but classloader is not
                                 val classLoader = (p.type.javaType as? Class<*>)?.classLoader
-                                throw IllegalArgumentException("Parameter type ${p.type}:{$classLoader} is not supported. Application is loaded as ${ApplicationClassInstance}:{${ApplicationClassInstance.classLoader}}")
+                                throw IllegalArgumentException("Parameter type ${p.type}:{$classLoader} is not supported." +
+                                        "Application is loaded as $ApplicationClassInstance:{${ApplicationClassInstance.classLoader}}")
                             }
+
                             throw IllegalArgumentException("Parameter type '${p.type}' of parameter '${p.name ?: "<receiver>"}' is not supported")
                         }
                     }

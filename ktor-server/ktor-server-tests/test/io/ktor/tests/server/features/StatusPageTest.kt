@@ -1,14 +1,16 @@
 package io.ktor.tests.server.features
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.features.*
 import io.ktor.http.*
 import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.testing.*
-import io.ktor.util.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.io.*
+import kotlinx.coroutines.io.CancellationException
 import org.junit.Test
 import kotlin.test.*
 
@@ -144,7 +146,7 @@ class StatusPageTest {
                 }
             }
 
-            application.intercept(ApplicationCallPipeline.Infrastructure) {
+            application.intercept(ApplicationCallPipeline.Features) {
                 call.response.pipeline.intercept(ApplicationSendPipeline.Transform) { message ->
                     if (message is O)
                         proceedWith(HttpStatusCode.NotFound)
@@ -199,7 +201,7 @@ class StatusPageTest {
         class O
 
         withTestApplication {
-            application.intercept(ApplicationCallPipeline.Infrastructure) {
+            application.intercept(ApplicationCallPipeline.Features) {
                 call.response.pipeline.intercept(ApplicationSendPipeline.Transform) { message ->
                     if (message is O)
                         throw IllegalStateException()
@@ -262,7 +264,7 @@ class StatusPageTest {
             }
 
             assertFails {
-                handleRequest(HttpMethod.Get, "/").awaitCompletion()
+                handleRequest(HttpMethod.Get, "/")
             }
         }
     }
@@ -289,6 +291,41 @@ class StatusPageTest {
                 assertEquals(HttpStatusCode.InternalServerError, call.response.status())
                 assertEquals("code", call.response.content)
             }
+        }
+    }
+
+    @Test
+    fun testErrorInAsync(): Unit = withTestApplication<Unit> {
+        class AsyncFailedException : Exception()
+
+        application.install(StatusPages) {
+            exception<AsyncFailedException> {
+                call.respondText("Async failed")
+            }
+            exception<CancellationException> {
+                call.respondText("Cancelled")
+            }
+        }
+
+        application.routing {
+            get("/fail") {
+                async { throw AsyncFailedException() }.await()
+            }
+            get("/cancel") {
+                val j = launch {
+                    delay(1000000L)
+                }
+                j.cancel()
+                call.respondText("OK")
+            }
+        }
+
+        handleRequest(HttpMethod.Get, "/fail").let {
+            assertEquals("Async failed", it.response.content)
+        }
+
+        handleRequest(HttpMethod.Get, "/cancel").let {
+            assertEquals("OK", it.response.content)
         }
     }
 }

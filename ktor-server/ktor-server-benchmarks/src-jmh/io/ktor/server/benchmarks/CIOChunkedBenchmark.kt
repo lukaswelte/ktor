@@ -1,9 +1,8 @@
 package io.ktor.server.benchmarks
 
 import io.ktor.http.cio.*
-import io.netty.handler.stream.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 import org.openjdk.jmh.annotations.*
 import java.nio.ByteBuffer
 import java.util.*
@@ -18,7 +17,7 @@ class CIOChunkedBenchmark {
     }
 
     @Benchmark
-    fun encode() = runBlocking(Unconfined) {
+    fun encode() = runBlocking(Dispatchers.Unconfined) {
         val bb: ByteBuffer = data.duplicate()
 
         val source = ByteReadChannel(bb)

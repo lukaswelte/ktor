@@ -1,139 +1,48 @@
 package io.ktor.server.netty.cio
 
 import io.ktor.server.netty.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.internal.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.internal.*
 import java.util.concurrent.atomic.*
 
-private const val StateRunning = 0
-private const val StateClosed = 1
-private const val StateCancelled = 2
-
-internal class NettyRequestQueue(private val limit: Int) {
+internal class NettyRequestQueue(internal val readLimit: Int, internal val runningLimit: Int) {
     init {
-        require(limit > 0)
+        require(readLimit > 0) { "readLimit should be positive: $readLimit" }
+        require(runningLimit > 0) { "executeLimit should be positive: $runningLimit" }
     }
 
-    private val queue = LockFreeLinkedListHead()
-    @Volatile
-    private var counter = 0
+    private val incomingQueue = Channel<CallElement>(Channel.UNLIMITED)
 
-    @Volatile
-    private var receiver: CancellableContinuation<Unit>? = null
-
-    @Volatile
-    private var state = StateRunning
+    val elements: ReceiveChannel<CallElement> = incomingQueue
 
     fun schedule(call: NettyApplicationCall) {
-        if (state != StateRunning) { // fast path if closed
-            call.dispose() // see note below
-            return
-        }
-
         val element = CallElement(call)
-        val n = Counter.incrementAndGet(this)
-
-        if (!queue.addLastIfPrev(element, { it !is CloseElement })) {
-            // counter is already incremented but we can ignore it as the queue is already closed
-            call.dispose() // it is safe here to dispose as call handling is not yet started
-        } else if (n < limit) {
-            element.ensureRunning()
-            call.context.read()
-            resume()
-        } else if (n == limit) {
-            element.ensureRunning()
+        try {
+            incomingQueue.offer(element)
+        } catch (t: Throwable) {
+            element.tryDispose()
         }
     }
 
     fun close() {
-        if (State.compareAndSet(this, StateRunning, StateClosed)) {
-            queue.addLast(CloseElement())
-            resume()
-        }
+        incomingQueue.close()
     }
 
     fun cancel() {
-        if (State.compareAndSet(this, StateRunning, StateCancelled)) {
-            queue.addLast(CloseElement())
+        incomingQueue.close()
 
-            while (true) {
-                val element = queue.removeFirstIfIsInstanceOf<CallElement>() ?: break
-                element.tryDispose()
-            }
-
-            resume()
+        while (true) {
+            incomingQueue.poll()?.tryDispose() ?: break
         }
     }
 
-    tailrec suspend fun receiveOrNull(): NettyApplicationCall? {
-        val element = queue.removeFirstIfIsInstanceOf<CallElement>()
+    @UseExperimental(ExperimentalCoroutinesApi::class)
+    fun canRequestMoreEvents(): Boolean = incomingQueue.isEmpty
 
-        if (element != null) {
-            return returnCall(element) ?: return receiveOrNull()
-        }
-
-        if (state != StateRunning) {
-            if (state == StateCancelled) throw CancellationException()
-            if (queue.next is CloseElement) return null
-        }
-
-        return receiveOrNullSuspend()
-    }
-
-    fun canRequestMoreEvents(): Boolean = counter <= limit
-
-    private tailrec suspend fun receiveOrNullSuspend(): NettyApplicationCall? {
-        val element = queue.removeFirstIfIsInstanceOf<CallElement>()
-
-        if (element != null) {
-            return returnCall(element) ?: return receiveOrNullSuspend()
-        }
-
-        if (state != StateRunning) {
-            if (state == StateCancelled) throw CancellationException()
-            if (queue.next is CloseElement) return null
-        }
-
-        suspendCancellableCoroutine<Unit>(holdCancellability = true) { c ->
-            if (!Receiver.compareAndSet(this, null, c)) throw IllegalStateException("receive already pending")
-
-            if (state != StateRunning || queue.next is CallElement) {
-                if (Receiver.compareAndSet(this, c, null)) {
-                    c.resume(Unit)
-                    return@suspendCancellableCoroutine
-                }
-            }
-
-            c.invokeOnCompletion(onCancelling = true, handler = {
-                Receiver.compareAndSet(this, c, null)
-            })
-        }
-
-        return receiveOrNullSuspend()
-    }
-
-    private fun resume() {
-        Receiver.getAndSet(this, null)?.resume(Unit)
-    }
-
-    private fun returnCall(element: CallElement): NettyApplicationCall? {
-        if (state == StateCancelled) {
-            element.tryDispose()
-            return null
-        }
-
-        val n = Counter.getAndDecrement(this)
-        if (n == limit) {
-            element.call.context.read()
-            (queue.next as? CallElement)?.ensureRunning()
-        }
-
-        return if (element.ensureRunning()) element.call else null
-    }
-
-    private class CloseElement : LockFreeLinkedListNode()
-    private class CallElement(val call: NettyApplicationCall) : LockFreeLinkedListNode() {
-        @Volatile
+    @UseExperimental(InternalCoroutinesApi::class)
+    internal class CallElement(val call: NettyApplicationCall) : LockFreeLinkedListNode() {
+        @kotlin.jvm.Volatile
         private var scheduled: Int = 0
 
         fun ensureRunning(): Boolean {
@@ -154,13 +63,5 @@ internal class NettyRequestQueue(private val limit: Int) {
         companion object {
             private val Scheduled = AtomicIntegerFieldUpdater.newUpdater(CallElement::class.java, CallElement::scheduled.name)!!
         }
-    }
-
-    companion object {
-        private val Counter = AtomicIntegerFieldUpdater.newUpdater(NettyRequestQueue::class.java, NettyRequestQueue::counter.name)!!
-        private val State = AtomicIntegerFieldUpdater.newUpdater(NettyRequestQueue::class.java, NettyRequestQueue::state.name)!!
-
-        @Suppress("UNCHECKED_CAST")
-        private val Receiver = AtomicReferenceFieldUpdater.newUpdater(NettyRequestQueue::class.java, CancellableContinuation::class.java, NettyRequestQueue::receiver.name) as AtomicReferenceFieldUpdater<NettyRequestQueue, CancellableContinuation<Unit>?>
     }
 }

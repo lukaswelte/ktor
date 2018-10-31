@@ -1,10 +1,13 @@
 package io.ktor.server.benchmarks
 
 import io.ktor.application.*
-import io.ktor.cio.*
-import io.ktor.pipeline.*
+import io.ktor.util.cio.*
+import io.ktor.util.pipeline.*
 import io.ktor.server.testing.*
+import io.ktor.util.*
+import kotlinx.coroutines.*
 import org.openjdk.jmh.annotations.*
+import kotlin.coroutines.intrinsics.*
 
 @State(Scope.Benchmark)
 class BaselinePipeline {
@@ -17,24 +20,36 @@ class BaselinePipeline {
     }
 
     @Benchmark
+    @UseExperimental(InternalAPI::class)
     fun suspendCalls(): String {
-        return runSync {
+        return runAndEnsureNoSuspensions {
             suspendFunctions.fold("") { a, b -> a + b() }
         }
     }
+}
+
+private fun <T> runAndEnsureNoSuspensions(block: suspend () -> T): T {
+    @Suppress("DEPRECATION")
+    val result = block.startCoroutineUninterceptedOrReturn(NoopContinuation)
+    if (result == COROUTINE_SUSPENDED) {
+        throw IllegalStateException("function passed to runAndEnsureNoSuspensions suspended")
+    }
+    @Suppress("UNCHECKED_CAST")
+    return result as T
 }
 
 @State(Scope.Benchmark)
 abstract class PipelineBenchmark {
     val environment = createTestEnvironment()
     val host = TestApplicationEngine(environment).apply { start() }
-    val call = TestApplicationCall(host.application)
+    val call = TestApplicationCall(host.application, coroutineContext = Dispatchers.Unconfined)
 
     val callPhase = PipelinePhase("Call")
     fun pipeline(): Pipeline<String, ApplicationCall> = Pipeline(callPhase)
     fun Pipeline<String, ApplicationCall>.intercept(block: PipelineInterceptor<String, ApplicationCall>) = intercept(callPhase, block)
 
-    fun <T : Any> Pipeline<T, ApplicationCall>.executeBlocking(subject: T) = runSync { execute(call, subject) }
+    @UseExperimental(InternalAPI::class)
+    fun <T : Any> Pipeline<T, ApplicationCall>.executeBlocking(subject: T) = runAndEnsureNoSuspensions { execute(call, subject) }
 
     lateinit var pipeline: Pipeline<String, ApplicationCall>
 

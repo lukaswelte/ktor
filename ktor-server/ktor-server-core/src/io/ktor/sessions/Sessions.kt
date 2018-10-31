@@ -7,17 +7,30 @@ import kotlin.reflect.*
 
 /**
  * Sessions reature that provides a mechanism to persist information between requests.
+ * @property providers list of session providers
  */
 class Sessions(val providers: List<SessionProvider>) {
+    /**
+     * Sessions configuration builder
+     */
     class Configuration {
+        /**
+         * List of session providers to be registered
+         */
         val providers = mutableListOf<SessionProvider>()
 
+        /**
+         * Register a session [provider]
+         */
         fun register(provider: SessionProvider) {
             // todo: check that type & name is unique
             providers.add(provider)
         }
     }
 
+    /**
+     * Feature installation object
+     */
     companion object Feature : ApplicationFeature<ApplicationCallPipeline, Sessions.Configuration, Sessions> {
         override val key = AttributeKey<Sessions>("Sessions")
         override fun install(pipeline: ApplicationCallPipeline, configure: Configuration.() -> Unit): Sessions {
@@ -26,7 +39,7 @@ class Sessions(val providers: List<SessionProvider>) {
 
             // For each call, call each provider and retrieve session data if needed.
             // Capture data in the attribute's value
-            pipeline.intercept(ApplicationCallPipeline.Infrastructure) {
+            pipeline.intercept(ApplicationCallPipeline.Features) {
                 val providerData = sessions.providers.associateBy({ it.name }) {
                     val receivedValue = it.transport.receive(call)
                     val unwrapped = it.tracker.load(call, receivedValue)
@@ -68,19 +81,75 @@ class Sessions(val providers: List<SessionProvider>) {
     }
 }
 
+/**
+ * Get current session or fail if no session feature installed
+ * @throws MissingApplicationFeatureException
+ */
 val ApplicationCall.sessions: CurrentSession
-    get() = attributes.getOrNull(SessionKey) ?: throw IllegalStateException("Sessions feature should be installed to use sessions")
+    get() = attributes.getOrNull(SessionKey) ?: throw MissingApplicationFeatureException(Sessions.key)
 
+/**
+ * Represents a container for all session instances
+ */
 interface CurrentSession {
+    /**
+     * Set new session instance with [name]
+     * @throws IllegalStateException if no session provider registered with for [name]
+     */
     fun set(name: String, value: Any?)
+
+    /**
+     * Get session instance for [name]
+     * @throws IllegalStateException if no session provider registered with for [name]
+     */
     fun get(name: String): Any?
+
+    /**
+     * Clear session instance for [name]
+     * @throws IllegalStateException if no session provider registered with for [name]
+     */
     fun clear(name: String)
+
+    /**
+     * Find session name for the specified [type] or fail if not found
+     * @throws IllegalStateException if no session provider registered for [type]
+     */
     fun findName(type: KClass<*>): String
 }
 
+/**
+ * Set session instance with type [T]
+ * @throws IllegalStateException if no session provider registered for type [T]
+ */
 inline fun <reified T> CurrentSession.set(value: T?) = set(findName(T::class), value)
+
+/**
+ * Get session instance with type [T]
+ * @throws IllegalStateException if no session provider registered for type [T]
+ */
 inline fun <reified T> CurrentSession.get(): T? = get(findName(T::class)) as T?
+
+/**
+ * Clear session instance with type [T]
+ * @throws IllegalStateException if no session provider registered for type [T]
+ */
 inline fun <reified T> CurrentSession.clear() = clear(findName(T::class))
+
+/**
+ * Get or generate a new session instance using [generator] with type [T] (or [name] if specified)
+ * @throws IllegalStateException if no session provider registered for type [T] (or [name] if specified)
+ */
+inline fun <reified T> CurrentSession.getOrSet(name: String = findName(T::class), generator: () -> T): T {
+    val result = get<T>()
+
+    if (result != null) {
+        return result
+    }
+
+    return generator().apply {
+        set(name, this)
+    }
+}
 
 private data class SessionData(val sessions: Sessions,
                                val providerData: Map<String, SessionProviderData>) : CurrentSession {

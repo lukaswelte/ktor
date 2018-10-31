@@ -3,36 +3,32 @@ package io.ktor.client.engine.apache
 import io.ktor.client.call.*
 import io.ktor.client.response.*
 import io.ktor.http.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
-import java.util.*
+import io.ktor.util.date.*
+import kotlinx.coroutines.io.*
+import kotlin.coroutines.*
 
-
-class ApacheHttpResponse internal constructor(
-        override val call: HttpClientCall,
-        override val requestTime: Date,
-        override val executionContext: CompletableDeferred<Unit>,
-        private val engineResponse: org.apache.http.HttpResponse,
-        override val content: ByteReadChannel
+internal class ApacheHttpResponse internal constructor(
+    override val call: HttpClientCall,
+    override val requestTime: GMTDate,
+    private val engineResponse: org.apache.http.HttpResponse,
+    override val content: ByteReadChannel,
+    override val coroutineContext: CoroutineContext
 ) : HttpResponse {
+
     override val status: HttpStatusCode
     override val version: HttpProtocolVersion
     override val headers: Headers
-    override val responseTime: Date = Date()
+    override val responseTime: GMTDate = GMTDate()
 
     init {
-        val code = engineResponse.statusLine.statusCode
+        val statusLine = engineResponse.statusLine
 
-        status = HttpStatusCode.fromValue(code)
+        status = HttpStatusCode(statusLine.statusCode, statusLine.reasonPhrase)
         version = with(engineResponse.protocolVersion) { HttpProtocolVersion.fromValue(protocol, major, minor) }
         headers = Headers.build {
             engineResponse.allHeaders.forEach { headerLine ->
                 append(headerLine.name, headerLine.value)
             }
         }
-    }
-
-    override fun close() {
-        executionContext.complete(Unit)
     }
 }

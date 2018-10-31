@@ -1,10 +1,8 @@
 package io.ktor.request
 
 import io.ktor.application.*
-import io.ktor.content.*
 import io.ktor.http.*
-import io.ktor.util.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.io.*
 
 /**
  * Represents client's request
@@ -41,8 +39,8 @@ interface ApplicationRequest {
      */
     val cookies: RequestCookies
 
-    @Deprecated("Use receive<type>() instead")
-    fun receiveContent(): IncomingContent
-
+    /**
+     * Request's body channel (for content only)
+     */
     fun receiveChannel(): ByteReadChannel
 }

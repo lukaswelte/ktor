@@ -29,7 +29,7 @@ class VelocityTest {
 
             handleRequest(HttpMethod.Get, "/").response.let { response ->
                 assertNotNull(response.content)
-                @Suppress("DEPRECATION")
+                @Suppress("DEPRECATION_ERROR")
                 assert(response.content!!.lines()) {
                     shouldBe(listOf("<p>Hello, 1</p>", "<h1>Hello, World!</h1>"))
                 }
@@ -59,7 +59,7 @@ class VelocityTest {
                 addHeader(HttpHeaders.AcceptEncoding, "gzip")
             }.response.let { response ->
                 val content = GZIPInputStream(response.byteContent!!.inputStream()).reader().readText()
-                @Suppress("DEPRECATION")
+                @Suppress("DEPRECATION_ERROR")
                 assert(content.lines()) {
                     shouldBe(listOf("<p>Hello, 1</p>", "<h1>Hello, World!</h1>"))
                 }
@@ -86,7 +86,7 @@ class VelocityTest {
 
             handleRequest(HttpMethod.Get, "/").response.let { response ->
                 assertNotNull(response.content)
-                @Suppress("DEPRECATION")
+                @Suppress("DEPRECATION_ERROR")
                 assert(response.content!!.lines()) {
                     shouldBe(listOf("<p>Hello, 1</p>", "<h1>Hello, World!</h1>"))
                 }
@@ -128,7 +128,7 @@ class VelocityTest {
         val bax = "$"
 
         install(Velocity) {
-            setProperty("resource.loader", "string");
+            setProperty("resource.loader", "string")
             addProperty("string.resource.loader.class", StringResourceLoader::class.java.name)
             addProperty("string.resource.loader.repository.static", "false")
             init() // need to call `init` before trying to retrieve string repository

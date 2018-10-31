@@ -12,6 +12,8 @@ import java.util.concurrent.*
 import java.util.concurrent.atomic.*
 import kotlin.test.*
 
+@UseExperimental(EngineAPI::class)
+@Suppress("BlockingMethodInNonBlockingContext")
 class MultipleDispatchOnTimeout {
 
     private fun findFreePort() = ServerSocket(0).use { it.localPort }
@@ -34,7 +36,7 @@ class MultipleDispatchOnTimeout {
                     val timeout = Math.max((call.request as ServletApplicationRequest).servletRequest.asyncContext.timeout, 0)
                     //                    println("Timeout is: $timeout")
                     Thread.sleep(timeout + 1000)
-                    call.respondWrite {
+                    call.respondTextWriter {
                         write("A ok!")
 
                     }

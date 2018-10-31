@@ -1,15 +1,15 @@
 package io.ktor.tests.server.features
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.features.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.testing.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.io.*
 import org.junit.Test
 import kotlin.test.*
 
@@ -67,7 +67,7 @@ class ContentNegotiationTest {
             assertEquals("OK", call.response.content)
         }
         handleRequest(HttpMethod.Post, "/") {
-            body = "The Text"
+            setBody("The Text")
         }.let { call ->
             assertEquals(HttpStatusCode.OK, call.response.status())
             assertEquals(ContentType.Text.Plain, call.response.contentType().withoutParameters())
@@ -91,6 +91,10 @@ class ContentNegotiationTest {
                 post("/") {
                     val text = call.receive<Wrapper>().value
                     call.respond(Wrapper("OK: $text"))
+                }
+                post("/raw") {
+                    val text = call.receiveText()
+                    call.respond("RAW: $text")
                 }
             }
 
@@ -179,18 +183,29 @@ class ContentNegotiationTest {
             handleRequest(HttpMethod.Post, "/") {
                 addHeader(HttpHeaders.ContentType, customContentType.toString())
                 addHeader(HttpHeaders.Accept, customContentType.toString())
-                body = "[The Text]"
+                setBody("[The Text]")
             }.let { call ->
                 assertEquals(HttpStatusCode.OK, call.response.status())
                 assertEquals(customContentType, call.response.contentType().withoutParameters())
                 assertEquals("[OK: The Text]", call.response.content)
             }
 
+            // Post to raw endpoint with custom content type
+            handleRequest(HttpMethod.Post, "/raw") {
+                addHeader(HttpHeaders.ContentType, customContentType.toString())
+                addHeader(HttpHeaders.Accept, customContentType.toString())
+                setBody("[The Text]")
+            }.let { call ->
+                assertEquals(HttpStatusCode.OK, call.response.status())
+                assertEquals(ContentType.Text.Plain, call.response.contentType().withoutParameters())
+                assertEquals("RAW: [The Text]", call.response.content)
+            }
+
             // Post with charset
             handleRequest(HttpMethod.Post, "/") {
                 addHeader(HttpHeaders.ContentType, customContentType.withCharset(Charsets.UTF_8).toString())
                 addHeader(HttpHeaders.Accept, customContentType.toString())
-                body = "[The Text]"
+                setBody("[The Text]")
             }.let { call ->
                 assertEquals(HttpStatusCode.OK, call.response.status())
                 assertEquals(customContentType, call.response.contentType().withoutParameters())

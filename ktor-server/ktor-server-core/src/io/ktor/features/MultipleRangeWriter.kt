@@ -1,20 +1,24 @@
 package io.ktor.features
 
 import io.ktor.http.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
-
+import io.ktor.util.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 
 private val NEWLINE = "\r\n".toByteArray(Charsets.ISO_8859_1)
 private val FIXED_HEADERS_PART_LENGTH = 14 + HttpHeaders.ContentLength.length + HttpHeaders.ContentRange.length
 
-fun writeMultipleRanges(
-        channelProducer: (LongRange) -> ByteReadChannel,
-        ranges: List<LongRange>,
-        fullLength: Long?,
-        boundary: String,
-        contentType: String
-): ByteReadChannel = writer(Unconfined, autoFlush = true) {
+/**
+ * Start multirange response writer coroutine
+ */
+@KtorExperimentalAPI
+fun CoroutineScope.writeMultipleRanges(
+    channelProducer: (LongRange) -> ByteReadChannel,
+    ranges: List<LongRange>,
+    fullLength: Long?,
+    boundary: String,
+    contentType: String
+): ByteReadChannel = writer(Dispatchers.Unconfined, autoFlush = true) {
     for (range in ranges) {
         val current = channelProducer(range)
         channel.writeHeaders(range, boundary, contentType, fullLength)
@@ -27,7 +31,12 @@ fun writeMultipleRanges(
 }.channel
 
 
-private suspend fun ByteWriteChannel.writeHeaders(range: LongRange, boundary: String, contentType: String, fullLength: Long?) {
+private suspend fun ByteWriteChannel.writeHeaders(
+    range: LongRange,
+    boundary: String,
+    contentType: String,
+    fullLength: Long?
+) {
     val contentRangeHeaderValue = contentRangeHeaderValue(range, fullLength, RangeUnits.Bytes)
     val estimate = boundary.length + contentType.length + contentRangeHeaderValue.length + FIXED_HEADERS_PART_LENGTH
     val headers = buildString(estimate) {

@@ -2,15 +2,15 @@ package io.ktor.server.testing
 
 import io.ktor.application.*
 import io.ktor.client.response.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.http.*
 import io.ktor.http.cio.*
 import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.engine.*
 import io.ktor.tests.http.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 import kotlinx.io.streams.*
 import org.junit.*
 import org.junit.Test
@@ -21,7 +21,7 @@ import java.nio.ByteBuffer
 import java.util.*
 import java.util.concurrent.*
 import kotlin.concurrent.*
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 import kotlin.test.*
 
 @RunWith(StressSuiteRunner::class)
@@ -243,7 +243,7 @@ abstract class EngineStressSuite<TEngine : ApplicationEngine, TConfiguration : A
     fun `test respond write`() {
         createAndStartServer {
             get("/") {
-                call.respondWrite {
+                call.respondTextWriter {
                     append(endMarker)
                     flush()
                     append("\r\n")

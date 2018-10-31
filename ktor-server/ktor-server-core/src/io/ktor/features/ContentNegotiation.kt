@@ -1,14 +1,13 @@
 package io.ktor.features
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.util.*
-import java.nio.charset.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.io.*
 import java.nio.charset.Charset
 
 /**
@@ -49,14 +48,14 @@ class ContentNegotiation(val registrations: List<ConverterRegistration>) {
      * Implementation of an [ApplicationFeature] for the [ContentNegotiation]
      */
     companion object Feature : ApplicationFeature<ApplicationCallPipeline, Configuration, ContentNegotiation> {
-        override val key = AttributeKey<ContentNegotiation>("gson")
+        override val key = AttributeKey<ContentNegotiation>("ContentNegotiation")
 
         override fun install(pipeline: ApplicationCallPipeline, configure: Configuration.() -> Unit): ContentNegotiation {
             val configuration = Configuration().apply(configure)
             val feature = ContentNegotiation(configuration.registrations)
 
             // Respond with "415 Unsupported Media Type" if content cannot be transformed on receive
-            pipeline.intercept(ApplicationCallPipeline.Infrastructure) {
+            pipeline.intercept(ApplicationCallPipeline.Features) {
                 try {
                     proceed()
                 } catch (e: UnsupportedMediaTypeException) {
@@ -64,7 +63,7 @@ class ContentNegotiation(val registrations: List<ConverterRegistration>) {
                 }
             }
 
-            pipeline.sendPipeline.intercept(ApplicationSendPipeline.Render) {
+            pipeline.sendPipeline.intercept(ApplicationSendPipeline.Render) { subject ->
                 if (subject is OutgoingContent) return@intercept
 
                 val acceptItems = call.request.acceptItems()
@@ -88,21 +87,25 @@ class ContentNegotiation(val registrations: List<ConverterRegistration>) {
                 proceedWith(rendered)
             }
 
-            pipeline.receivePipeline.intercept(ApplicationReceivePipeline.Transform) {
+            pipeline.receivePipeline.intercept(ApplicationReceivePipeline.Transform) { receive ->
                 if (subject.value !is ByteReadChannel) return@intercept
                 val contentType = call.request.contentType().withoutParameters()
                 val suitableConverter = feature.registrations.firstOrNull { it.contentType.match(contentType) }
                         ?: throw UnsupportedMediaTypeException(contentType)
                 val converted = suitableConverter.converter.convertForReceive(this)
                         ?: throw UnsupportedMediaTypeException(contentType)
-                proceedWith(ApplicationReceiveRequest(it.type, converted))
+                proceedWith(ApplicationReceiveRequest(receive.type, converted))
             }
             return feature
         }
     }
 }
 
-class UnsupportedMediaTypeException(contentType: ContentType) : Exception("Content type $contentType is not supported")
+/**
+ * Thrown when there is no conversion for a content type configured
+ */
+class UnsupportedMediaTypeException(contentType: ContentType) :
+        ContentTransformationException("Content type $contentType is not supported")
 
 /**
  * A custom content converted that could be registered in [ContentNegotiation] feature for any particular content type
@@ -134,6 +137,10 @@ interface ContentConverter {
     suspend fun convertForReceive(context: PipelineContext<ApplicationReceiveRequest, ApplicationCall>): Any?
 }
 
+/**
+ * Detect suitable charset for an application call by `Accept` header or fallback to [defaultCharset]
+ */
+@KtorExperimentalAPI
 fun ApplicationCall.suitableCharset(defaultCharset: Charset = Charsets.UTF_8): Charset {
     for ((charset, _) in request.acceptCharsetItems()) when {
         charset == "*" -> return defaultCharset

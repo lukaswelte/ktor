@@ -1,12 +1,23 @@
+@file:Suppress("INVISIBLE_MEMBER", "INVISIBLE_REFERENCE")
 package io.ktor.network.selector
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.*
-import java.io.*
+import io.ktor.util.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.internal.*
+import java.io.Closeable
 import java.nio.channels.*
 import java.util.concurrent.atomic.*
+import kotlin.coroutines.*
+import kotlin.coroutines.intrinsics.*
+import kotlin.jvm.*
 
-class ActorSelectorManager(dispatcher: CoroutineDispatcher) : SelectorManagerSupport(), Closeable {
+/**
+ * Default CIO selector manager implementation
+ */
+@Suppress("BlockingMethodInNonBlockingContext")
+@KtorExperimentalAPI
+class ActorSelectorManager(dispatcher: CoroutineContext) : SelectorManagerSupport(), Closeable, CoroutineScope {
     @Volatile
     private var selectorRef: Selector? = null
 
@@ -15,35 +26,49 @@ class ActorSelectorManager(dispatcher: CoroutineDispatcher) : SelectorManagerSup
     @Volatile
     private var inSelect = false
 
-    private val mb = actor<Selectable>(dispatcher, capacity = kotlinx.coroutines.experimental.channels.Channel.UNLIMITED) {
-        provider.openSelector()!!.use { selector ->
-            selectorRef = selector
-            try {
-                process(channel, selector)
-            } catch (t: Throwable) {
-                channel.close()
-                cancelAllSuspensions(selector, t)
-            } finally {
-                channel.close()
-                cancelAllSuspensions(selector, null)
-                selectorRef = null
-            }
+    private val continuation = ContinuationHolder<Unit, Continuation<Unit>>()
 
-            channel.consumeEach {
-                cancelAllSuspensions(it, ClosedSendChannelException("Failed to apply interest: selector closed"))
+    @Volatile
+    private var closed = false
+
+    private val mb = LockFreeMPSCQueue<Selectable>()
+
+    override val coroutineContext: CoroutineContext = dispatcher + CoroutineName("selector")
+
+    init {
+        launch {
+            provider.openSelector()!!.use { selector ->
+                selectorRef = selector
+                try {
+                    process(mb, selector)
+                } catch (t: Throwable) {
+                    closed = true
+                    mb.close()
+                    cancelAllSuspensions(selector, t)
+                } finally {
+                    closed = true
+                    mb.close()
+                    selectorRef = null
+                    cancelAllSuspensions(selector, null)
+                }
+
+                while (true) {
+                    val m = mb.removeFirstOrNull() ?: break
+                    cancelAllSuspensions(m, ClosedSendChannelException("Failed to apply interest: selector closed"))
+                }
             }
         }
     }
 
-    private suspend fun process(mb: ReceiveChannel<Selectable>, selector: Selector) {
-        while (!mb.isClosedForReceive) {
+    private suspend fun process(mb: LockFreeMPSCQueue<Selectable>, selector: Selector) {
+        while (!closed) {
             processInterests(mb, selector)
 
             if (pending > 0) {
                 if (select(selector) > 0) {
                     handleSelectedKeys(selector.selectedKeys(), selector.keys())
                 } else {
-                    val received = mb.poll()
+                    val received = mb.removeFirstOrNull()
                     if (received != null) applyInterest(selector, received)
                     else yield()
                 }
@@ -59,8 +84,9 @@ class ActorSelectorManager(dispatcher: CoroutineDispatcher) : SelectorManagerSup
         }
     }
 
-    private fun select(selector: Selector): Int {
+    private suspend fun select(selector: Selector): Int {
         inSelect = true
+        dispatchIfNeeded()
         return if (wakeup.get() == 0L) {
             val count = selector.select(500L)
             inSelect = false
@@ -72,15 +98,21 @@ class ActorSelectorManager(dispatcher: CoroutineDispatcher) : SelectorManagerSup
         }
     }
 
+    private suspend inline fun dispatchIfNeeded() {
+        yield() // it will always redispatch it to the right thread
+        // it is very important here because we do _unintercepted_ resume that may lead to blocking on a wrong thread
+        // that may cause deadlock
+    }
+
     private fun selectWakeup() {
         if (wakeup.incrementAndGet() == 1L && inSelect) {
             selectorRef?.wakeup()
         }
     }
 
-    private fun processInterests(mb: ReceiveChannel<Selectable>, selector: Selector) {
+    private fun processInterests(mb: LockFreeMPSCQueue<Selectable>, selector: Selector) {
         while (true) {
-            val selectable = mb.poll() ?: break
+            val selectable = mb.removeFirstOrNull() ?: break
             applyInterest(selector, selectable)
         }
     }
@@ -95,17 +127,75 @@ class ActorSelectorManager(dispatcher: CoroutineDispatcher) : SelectorManagerSup
         }
     }
 
+    /**
+     * Publish current [selectable] interest
+     */
     override fun publishInterest(selectable: Selectable) {
         try {
-            mb.offer(selectable)
-            selectWakeup()
+            if (mb.addLast(selectable)) {
+                if (!continuation.resume(Unit)) {
+                    selectWakeup()
+                }
+            }
+            else if (selectable.channel.isOpen) throw ClosedSelectorException()
+            else throw ClosedChannelException()
         } catch (t: Throwable) {
             cancelAllSuspensions(selectable, t)
         }
     }
 
+
+    private suspend fun LockFreeMPSCQueue<Selectable>.receiveOrNull(): Selectable? {
+        return removeFirstOrNull() ?: receiveOrNullSuspend()
+    }
+
+    private suspend fun LockFreeMPSCQueue<Selectable>.receiveOrNullSuspend(): Selectable? {
+        while (true) {
+            val m = removeFirstOrNull()
+            if (m != null) return m
+
+            if (closed) return null
+
+            suspendCoroutineUninterceptedOrReturn<Unit> {
+                continuation.suspendIf(it) { isEmpty && !closed } ?: Unit
+            }
+        }
+    }
+
+    /**
+     * Close selector manager and release all resources
+     */
     override fun close() {
+        closed = true
         mb.close()
-        selectWakeup()
+        if (!continuation.resume(Unit)) {
+            selectWakeup()
+        }
+    }
+
+    private class ContinuationHolder<R, C : Continuation<R>> {
+        private val ref = AtomicReference<C?>(null)
+
+        fun resume(value: R): Boolean {
+            val continuation = ref.getAndSet(null)
+            if (continuation != null) {
+                continuation.resume(value) /** we resume unintercepted, see [dispatchIfNeeded] */
+                return true
+            }
+
+            return false
+        }
+
+        /**
+         * @return `null` if not suspended due to failed condition or `COROUTINE_SUSPENDED` if successfully applied
+         */
+        inline fun suspendIf(continuation: C, condition: () -> Boolean): Any? {
+            if (!condition()) return null
+            if (!ref.compareAndSet(null, continuation)) {
+                throw IllegalStateException("Continuation is already set")
+            }
+            if (!condition() && ref.compareAndSet(continuation, null)) return null
+            return COROUTINE_SUSPENDED
+        }
     }
 }

@@ -1,18 +1,22 @@
 package io.ktor.server.netty
 
-import io.ktor.cio.*
+import io.ktor.util.cio.*
 import io.netty.channel.*
 import io.netty.util.concurrent.*
 import io.netty.util.concurrent.Future
-import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.*
 import java.io.*
 import java.util.concurrent.*
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 
 private val identityErrorHandler = { t: Throwable, c: Continuation<*> ->
     c.resumeWithException(t)
 }
 
+/**
+ * Suspend until the future completion.
+ * Resumes with the same exception if the future completes exceptionally
+ */
 suspend fun <T> Future<T>.suspendAwait(): T {
     return suspendAwait(identityErrorHandler)
 }
@@ -22,11 +26,19 @@ private val wrappingErrorHandler = { t: Throwable, c: Continuation<*> ->
     else c.resumeWithException(t)
 }
 
+/**
+ * Suspend until the future completion.
+ * Wraps futures completion exceptions into [ChannelWriteException]
+ */
 suspend fun <T> Future<T>.suspendWriteAwait(): T {
     return suspendAwait(wrappingErrorHandler)
 }
 
+/**
+ * Suspend until the future completion handling exception from the future using [exception] function
+ */
 suspend fun <T> Future<T>.suspendAwait(exception: (Throwable, Continuation<T>) -> Unit): T {
+    @Suppress("BlockingMethodInNonBlockingContext")
     if (isDone) return try { get() } catch (t: Throwable) { throw t.unwrap() }
 
     return suspendCancellableCoroutine { continuation ->
@@ -48,12 +60,13 @@ internal object NettyDispatcher : CoroutineDispatcher() {
     object CurrentContextKey : CoroutineContext.Key<CurrentContext>
 }
 
+@UseExperimental(InternalCoroutinesApi::class)
 private class CoroutineListener<T, F : Future<T>>(private val future: F,
                                                   private val continuation: CancellableContinuation<T>,
                                                   private val exception: (Throwable, Continuation<T>) -> Unit
 ) : GenericFutureListener<F>, DisposableHandle {
     init {
-        continuation.disposeOnCompletion(this)
+        continuation.disposeOnCancellation(this)
     }
 
     override fun operationComplete(future: F) {

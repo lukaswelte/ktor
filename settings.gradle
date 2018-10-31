@@ -1,117 +1,77 @@
+pluginManagement {
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == "kotlin2js") {
+                useModule("org.jetbrains.kotlin:kotlin-gradle-plugin:${requested.version}")
+            }
+        }
+    }
+}
 rootProject.name = 'ktor'
-include ':ktor-server:ktor-server-core'
-include ':ktor-server:ktor-server-tests'
-include ':ktor-server:ktor-server-host-common'
-include ':ktor-server:ktor-server-test-host'
-include ':ktor-server:ktor-server-jetty'
-include ':ktor-server:ktor-server-servlet'
-include ':ktor-server:ktor-server-tomcat'
-include ':ktor-server:ktor-server-netty'
-include ':ktor-server:ktor-server-cio'
-include ':ktor-server:ktor-server-benchmarks'
-include ':ktor-server'
-include ':ktor-client'
-include ':ktor-client:ktor-client-core'
-include ':ktor-client:ktor-client-tests'
-include ':ktor-client:ktor-client-apache'
-include ':ktor-client:ktor-client-cio'
-include ':ktor-client:ktor-client-jetty'
-include ':ktor-client:ktor-client-features'
-include ':ktor-client:ktor-client-features:ktor-client-json'
-include ':ktor-client:ktor-client-features:ktor-client-auth-basic'
-include ':ktor-features:ktor-freemarker'
-include ':ktor-features:ktor-velocity'
-include ':ktor-features:ktor-gson'
-include ':ktor-features:ktor-jackson'
-include ':ktor-features:ktor-metrics'
-include ':ktor-features:ktor-server-sessions'
-include ':ktor-features:ktor-locations'
-include ':ktor-features:ktor-websockets'
-include ':ktor-features:ktor-html-builder'
-include ':ktor-features:ktor-auth'
-include ':ktor-features:ktor-auth-ldap'
-include ':ktor-features:ktor-auth-jwt'
-include ':ktor-features'
-include ':ktor-http'
-include ':ktor-utils'
-include ':ktor-http-cio'
-include ':ktor-network'
-include ':ktor-samples:ktor-samples-hello'
-include ':ktor-samples:ktor-samples-html'
-include ':ktor-samples:ktor-samples-locations'
-include ':ktor-samples:ktor-samples-auth'
-include ':ktor-samples:ktor-samples-async'
-include ':ktor-samples:ktor-samples-testable'
-include ':ktor-samples:ktor-samples-gson'
-include ':ktor-samples:ktor-samples-jackson'
-include ':ktor-samples:ktor-samples-post'
-include ':ktor-samples:ktor-samples-embedded'
-include ':ktor-samples:ktor-samples-httpbin'
-include ':ktor-samples:ktor-samples-metrics'
-include ':ktor-samples:ktor-samples-guice'
-include ':ktor-samples:ktor-samples-youkube'
-include ':ktor-samples:ktor-samples-kweet'
-include ':ktor-samples:ktor-samples-websocket'
-include ':ktor-samples:ktor-samples-ssl-http2'
-include ':ktor-samples:ktor-samples-custom-feature'
-include ':ktor-samples:ktor-samples-static-content'
-include ':ktor-samples'
+enableFeaturePreview('GRADLE_METADATA')
 
-project(':ktor-server:ktor-server-core').projectDir = "$rootDir/ktor-server/ktor-server-core" as File
-project(':ktor-server:ktor-server-tests').projectDir = "$rootDir/ktor-server/ktor-server-tests" as File
-project(':ktor-server:ktor-server-host-common').projectDir = "$rootDir/ktor-server/ktor-server-host-common" as File
-project(':ktor-server:ktor-server-test-host').projectDir = "$rootDir/ktor-server/ktor-server-test-host" as File
-project(':ktor-server:ktor-server-jetty').projectDir = "$rootDir/ktor-server/ktor-server-jetty" as File
-project(':ktor-server:ktor-server-servlet').projectDir = "$rootDir/ktor-server/ktor-server-servlet" as File
-project(':ktor-server:ktor-server-tomcat').projectDir = "$rootDir/ktor-server/ktor-server-tomcat" as File
-project(':ktor-server:ktor-server-netty').projectDir = "$rootDir/ktor-server/ktor-server-netty" as File
-project(':ktor-server:ktor-server-cio').projectDir = "$rootDir/ktor-server/ktor-server-cio" as File
-project(':ktor-server:ktor-server-benchmarks').projectDir = "$rootDir/ktor-server/ktor-server-benchmarks" as File
-project(':ktor-server').projectDir = "$rootDir/ktor-server" as File
-project(':ktor-client').projectDir = "$rootDir/ktor-client" as File
-project(':ktor-client:ktor-client-core').projectDir = "$rootDir/ktor-client/ktor-client-core" as File
-project(':ktor-client:ktor-client-tests').projectDir = "$rootDir/ktor-client/ktor-client-tests" as File
-project(':ktor-client:ktor-client-apache').projectDir = "$rootDir/ktor-client/ktor-client-apache" as File
-project(':ktor-client:ktor-client-cio').projectDir = "$rootDir/ktor-client/ktor-client-cio" as File
-project(':ktor-client:ktor-client-jetty').projectDir = "$rootDir/ktor-client/ktor-client-jetty" as File
-project(':ktor-client:ktor-client-features').projectDir = "$rootDir/ktor-client/ktor-client-features" as File
-project(':ktor-client:ktor-client-features:ktor-client-json').projectDir = "$rootDir/ktor-client/ktor-client-features/ktor-client-json" as File
-project(':ktor-client:ktor-client-features:ktor-client-auth-basic').projectDir = "$rootDir/ktor-client/ktor-client-features/ktor-client-auth-basic" as File
-project(':ktor-features:ktor-freemarker').projectDir = "$rootDir/ktor-features/ktor-freemarker" as File
-project(':ktor-features:ktor-velocity').projectDir = "$rootDir/ktor-features/ktor-velocity" as File
-project(':ktor-features:ktor-gson').projectDir = "$rootDir/ktor-features/ktor-gson" as File
-project(':ktor-features:ktor-jackson').projectDir = "$rootDir/ktor-features/ktor-jackson" as File
-project(':ktor-features:ktor-metrics').projectDir = "$rootDir/ktor-features/ktor-metrics" as File
-project(':ktor-features:ktor-server-sessions').projectDir = "$rootDir/ktor-features/ktor-server-sessions" as File
-project(':ktor-features:ktor-locations').projectDir = "$rootDir/ktor-features/ktor-locations" as File
-project(':ktor-features:ktor-websockets').projectDir = "$rootDir/ktor-features/ktor-websockets" as File
-project(':ktor-features:ktor-html-builder').projectDir = "$rootDir/ktor-features/ktor-html-builder" as File
-project(':ktor-features:ktor-auth').projectDir = "$rootDir/ktor-features/ktor-auth" as File
-project(':ktor-features:ktor-auth-ldap').projectDir = "$rootDir/ktor-features/ktor-auth-ldap" as File
-project(':ktor-features:ktor-auth-jwt').projectDir = "$rootDir/ktor-features/ktor-auth-jwt" as File
-project(':ktor-features').projectDir = "$rootDir/ktor-features" as File
-project(':ktor-http').projectDir = "$rootDir/ktor-http" as File
-project(':ktor-utils').projectDir = "$rootDir/ktor-utils" as File
-project(':ktor-http-cio').projectDir = "$rootDir/ktor-http-cio" as File
-project(':ktor-network').projectDir = "$rootDir/ktor-network" as File
-project(':ktor-samples:ktor-samples-hello').projectDir = "$rootDir/ktor-samples/ktor-samples-hello" as File
-project(':ktor-samples:ktor-samples-html').projectDir = "$rootDir/ktor-samples/ktor-samples-html" as File
-project(':ktor-samples:ktor-samples-locations').projectDir = "$rootDir/ktor-samples/ktor-samples-locations" as File
-project(':ktor-samples:ktor-samples-auth').projectDir = "$rootDir/ktor-samples/ktor-samples-auth" as File
-project(':ktor-samples:ktor-samples-async').projectDir = "$rootDir/ktor-samples/ktor-samples-async" as File
-project(':ktor-samples:ktor-samples-testable').projectDir = "$rootDir/ktor-samples/ktor-samples-testable" as File
-project(':ktor-samples:ktor-samples-gson').projectDir = "$rootDir/ktor-samples/ktor-samples-gson" as File
-project(':ktor-samples:ktor-samples-jackson').projectDir = "$rootDir/ktor-samples/ktor-samples-jackson" as File
-project(':ktor-samples:ktor-samples-post').projectDir = "$rootDir/ktor-samples/ktor-samples-post" as File
-project(':ktor-samples:ktor-samples-embedded').projectDir = "$rootDir/ktor-samples/ktor-samples-embedded" as File
-project(':ktor-samples:ktor-samples-httpbin').projectDir = "$rootDir/ktor-samples/ktor-samples-httpbin" as File
-project(':ktor-samples:ktor-samples-metrics').projectDir = "$rootDir/ktor-samples/ktor-samples-metrics" as File
-project(':ktor-samples:ktor-samples-guice').projectDir = "$rootDir/ktor-samples/ktor-samples-guice" as File
-project(':ktor-samples:ktor-samples-youkube').projectDir = "$rootDir/ktor-samples/ktor-samples-youkube" as File
-project(':ktor-samples:ktor-samples-kweet').projectDir = "$rootDir/ktor-samples/ktor-samples-kweet" as File
-project(':ktor-samples:ktor-samples-websocket').projectDir = "$rootDir/ktor-samples/ktor-samples-websocket" as File
-project(':ktor-samples:ktor-samples-ssl-http2').projectDir = "$rootDir/ktor-samples/ktor-samples-ssl-http2" as File
-project(':ktor-samples:ktor-samples-custom-feature').projectDir = "$rootDir/ktor-samples/ktor-samples-custom-feature" as File
-project(':ktor-samples:ktor-samples-static-content').projectDir = "$rootDir/ktor-samples/ktor-samples-static-content" as File
-project(':ktor-samples').projectDir = "$rootDir/ktor-samples" as File
+def includeEx(String name) {
+    include name
+    project(name).projectDir = "$rootDir${name.replace(':', '/')}" as File
+}
 
+includeEx ':ktor-server:ktor-server-core'
+includeEx ':ktor-server:ktor-server-tests'
+includeEx ':ktor-server:ktor-server-host-common'
+includeEx ':ktor-server:ktor-server-test-host'
+includeEx ':ktor-server:ktor-server-jetty'
+includeEx ':ktor-server:ktor-server-servlet'
+includeEx ':ktor-server:ktor-server-tomcat'
+includeEx ':ktor-server:ktor-server-netty'
+includeEx ':ktor-server:ktor-server-cio'
+includeEx ':ktor-server:ktor-server-benchmarks'
+includeEx ':ktor-server'
+includeEx ':ktor-client'
+includeEx ':ktor-client:ktor-client-core'
+includeEx ':ktor-client:ktor-client-core:ktor-client-core-jvm'
+includeEx ':ktor-client:ktor-client-core:ktor-client-core-js'
+includeEx ':ktor-client:ktor-client-core:ktor-client-core-ios'
+includeEx ':ktor-client:ktor-client-tests'
+includeEx ':ktor-client:ktor-client-apache'
+includeEx ':ktor-client:ktor-client-android'
+includeEx ':ktor-client:ktor-client-cio'
+includeEx ':ktor-client:ktor-client-ios'
+includeEx ':ktor-client:ktor-client-jetty'
+includeEx ':ktor-client:ktor-client-js'
+includeEx ':ktor-client:ktor-client-mock'
+includeEx ':ktor-client:ktor-client-okhttp'
+includeEx ':ktor-client:ktor-client-features'
+includeEx ':ktor-client:ktor-client-features:ktor-client-json'
+includeEx ':ktor-client:ktor-client-features:ktor-client-json:ktor-client-json-tests'
+includeEx ':ktor-client:ktor-client-features:ktor-client-json:ktor-client-json-ios'
+includeEx ':ktor-client:ktor-client-features:ktor-client-json:ktor-client-json-jvm'
+includeEx ':ktor-client:ktor-client-features:ktor-client-json:ktor-client-json-js'
+includeEx ':ktor-client:ktor-client-features:ktor-client-json:ktor-client-gson'
+includeEx ':ktor-client:ktor-client-features:ktor-client-json:ktor-client-jackson'
+includeEx ':ktor-client:ktor-client-features:ktor-client-auth-basic'
+includeEx ':ktor-client:ktor-client-features:ktor-client-websocket'
+includeEx ':ktor-features:ktor-freemarker'
+includeEx ':ktor-features:ktor-velocity'
+includeEx ':ktor-features:ktor-gson'
+includeEx ':ktor-features:ktor-jackson'
+includeEx ':ktor-features:ktor-metrics'
+includeEx ':ktor-features:ktor-server-sessions'
+includeEx ':ktor-features:ktor-locations'
+includeEx ':ktor-features:ktor-websockets'
+includeEx ':ktor-features:ktor-html-builder'
+includeEx ':ktor-features:ktor-auth'
+includeEx ':ktor-features:ktor-auth-ldap'
+includeEx ':ktor-features:ktor-auth-jwt'
+includeEx ':ktor-features:ktor-webjars'
+includeEx ':ktor-features'
+includeEx ':ktor-http'
+includeEx ':ktor-http:ktor-http-jvm'
+includeEx ':ktor-http:ktor-http-js'
+includeEx ':ktor-http:ktor-http-ios'
+includeEx ':ktor-http:ktor-http-cio'
+includeEx ':ktor-utils'
+includeEx ':ktor-utils:ktor-utils-jvm'
+includeEx ':ktor-utils:ktor-utils-js'
+includeEx ':ktor-utils:ktor-utils-ios'
+includeEx ':ktor-network'
+includeEx ':ktor-network:ktor-network-tls'

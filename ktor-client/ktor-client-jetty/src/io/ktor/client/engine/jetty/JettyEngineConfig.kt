@@ -4,6 +4,12 @@ import io.ktor.client.engine.*
 import org.eclipse.jetty.util.ssl.*
 
 
+/**
+ * Configuration for [Jetty] implementation of [HttpClientEngineFactory].
+ */
 class JettyEngineConfig : HttpClientEngineConfig() {
-    var sslContextFactory = SslContextFactory(true)
+    /**
+     * A Jetty's [SslContextFactory]. By default it trusts all the certificates.
+     */
+    var sslContextFactory: SslContextFactory = SslContextFactory(true)
 }

@@ -2,7 +2,7 @@ package io.ktor.routing
 
 import io.ktor.application.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.util.*
@@ -12,15 +12,29 @@ import io.ktor.util.*
  * @param application is an instance of [Application] for this routing
  */
 class Routing(val application: Application) : Route(parent = null, selector = RootRouteSelector) {
+    private val tracers = mutableListOf<(RoutingResolveTrace) -> Unit>()
+
+    /**
+     * Register a route resolution trace function.
+     * See https://ktor.io/servers/features/routing.html#tracing for details
+     */
+    fun trace(block: (RoutingResolveTrace) -> Unit) {
+        tracers.add(block)
+    }
+
     private suspend fun interceptor(context: PipelineContext<Unit, ApplicationCall>) {
-        val resolveContext = RoutingResolveContext(this, context.call)
+        val resolveContext = RoutingResolveContext(this, context.call, tracers)
         val resolveResult = resolveContext.resolve()
-        if (resolveResult.succeeded) {
+        if (resolveResult is RoutingResolveResult.Success) {
             executeResult(context, resolveResult.route, resolveResult.parameters)
         }
     }
 
-    private suspend fun executeResult(context: PipelineContext<Unit, ApplicationCall>, route: Route, parameters: Parameters) {
+    private suspend fun executeResult(
+        context: PipelineContext<Unit, ApplicationCall>,
+        route: Route,
+        parameters: Parameters
+    ) {
         val routingCallPipeline = route.buildPipeline()
         val receivePipeline = ApplicationReceivePipeline().apply {
             merge(context.call.request.pipeline)
@@ -42,6 +56,7 @@ class Routing(val application: Application) : Route(parent = null, selector = Ro
     /**
      * Installable feature for [Routing]
      */
+    @Suppress("PublicApiImplicitType")
     companion object Feature : ApplicationFeature<Application, Routing, Routing> {
 
         /**
@@ -83,5 +98,7 @@ val Route.application: Application
 /**
  * Gets or installs a [Routing] feature for the this [Application] and runs a [configuration] script on it
  */
-fun Application.routing(configuration: Routing.() -> Unit) = featureOrNull(Routing)?.apply(configuration) ?: install(Routing, configuration)
+@ContextDsl
+fun Application.routing(configuration: Routing.() -> Unit): Routing =
+    featureOrNull(Routing)?.apply(configuration) ?: install(Routing, configuration)
 

@@ -1,80 +1,78 @@
 package io.ktor.client.engine.jetty
 
-import io.ktor.cio.*
+import io.ktor.util.cio.*
 import io.ktor.client.call.*
+import io.ktor.client.engine.*
 import io.ktor.client.request.*
 import io.ktor.client.response.*
 import io.ktor.client.utils.*
-import io.ktor.content.*
 import io.ktor.http.*
 import io.ktor.http.HttpMethod
+import io.ktor.http.content.*
 import io.ktor.util.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
+import io.ktor.util.date.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 import org.eclipse.jetty.http.*
-import org.eclipse.jetty.http2.api.*
+import org.eclipse.jetty.http2.client.*
 import org.eclipse.jetty.http2.frames.*
-import java.io.*
-import java.util.*
+import java.io.Closeable
+import java.nio.*
+import kotlin.coroutines.*
 
 
-class JettyHttpRequest(
-        override val call: HttpClientCall,
-        private val client: JettyHttp2Engine,
-        private val dispatcher: CoroutineDispatcher,
-        requestData: HttpRequestData
+internal class JettyHttpRequest(
+    override val call: HttpClientCall,
+    private val client: JettyHttp2Engine,
+    requestData: HttpRequestData,
+    override val coroutineContext: CoroutineContext
 ) : HttpRequest {
-    override val attributes: Attributes = Attributes()
+    override val attributes: Attributes = requestData.attributes
 
     override val method: HttpMethod = requestData.method
     override val url: Url = requestData.url
     override val headers: Headers = requestData.headers
 
-    override val executionContext: CompletableDeferred<Unit> = requestData.executionContext
+    override val content: OutgoingContent = requestData.body as OutgoingContent
 
-    override suspend fun execute(content: OutgoingContent): HttpResponse {
-        val requestTime = Date()
-        val session = client.connect(url.host, url.port).apply {
-            this.settings(SettingsFrame(emptyMap(), true), org.eclipse.jetty.util.Callback.NOOP)
-        }
+    internal suspend fun execute(): HttpResponse {
+        val requestTime = GMTDate()
+        val session: HTTP2ClientSession = client.connect(url.host, url.port).apply {
+            settings(SettingsFrame(emptyMap(), true), org.eclipse.jetty.util.Callback.NOOP)
+        } as HTTP2ClientSession
 
         val headersFrame = prepareHeadersFrame(content)
 
         val bodyChannel = ByteChannel()
-        val responseContext = CompletableDeferred<Unit>()
-        val responseListener = JettyResponseListener(bodyChannel, dispatcher, responseContext)
+        val responseListener = JettyResponseListener(session, bodyChannel, coroutineContext)
 
-        val jettyRequest = withPromise<Stream> { promise ->
+        val jettyRequest = JettyHttp2Request(withPromise { promise ->
             session.newStream(headersFrame, promise, responseListener)
-        }.let { JettyHttp2Request(it) }
+        })
 
         sendRequestBody(jettyRequest, content)
 
         val (status, headers) = responseListener.awaitHeaders()
         val origin = Closeable { bodyChannel.close() }
-        return JettyHttpResponse(call, status, headers, requestTime, responseContext, bodyChannel, origin)
+        return JettyHttpResponse(call, status, headers, requestTime, bodyChannel, origin, coroutineContext)
     }
 
 
     private fun prepareHeadersFrame(content: OutgoingContent): HeadersFrame {
         val rawHeaders = HttpFields()
 
-        headers.flattenForEach { name, value ->
-            rawHeaders.add(name, value)
-        }
-
-        content.headers.flattenForEach { name, value ->
+        mergeHeaders(headers, content) { name, value ->
             rawHeaders.add(name, value)
         }
 
         val meta = MetaData.Request(
-                method.value,
-                url.protocol.name,
-                HostPortHttpField("${url.host}:${url.port}"),
-                url.fullPath,
-                HttpVersion.HTTP_2,
-                rawHeaders,
-                Long.MIN_VALUE
+            method.value,
+            url.protocol.name,
+            HostPortHttpField("${url.host}:${url.port}"),
+            url.fullPath,
+            HttpVersion.HTTP_2,
+            rawHeaders,
+            Long.MIN_VALUE
         )
 
         return HeadersFrame(meta, null, content is OutgoingContent.NoContent)
@@ -89,24 +87,18 @@ class JettyHttpRequest(
             }
             is OutgoingContent.ReadChannelContent -> content.readFrom().writeResponse(request)
             is OutgoingContent.WriteChannelContent -> {
-                val source = writer(dispatcher + executionContext) { content.writeTo(channel) }.channel
+                val source = GlobalScope.writer(coroutineContext) { content.writeTo(channel) }.channel
                 source.writeResponse(request)
             }
             is OutgoingContent.ProtocolUpgrade -> throw UnsupportedContentTypeException(content)
         }
     }
 
-    private fun ByteReadChannel.writeResponse(request: JettyHttp2Request) = launch(dispatcher + executionContext) {
+    private fun ByteReadChannel.writeResponse(request: JettyHttp2Request): Job = launch {
         val buffer = HttpClientDefaultPool.borrow()
         pass(buffer) { request.write(it) }
         HttpClientDefaultPool.recycle(buffer)
         request.endBody()
-    }.invokeOnCompletion { cause ->
-        if (cause != null) {
-            executionContext.completeExceptionally(cause)
-        } else {
-            executionContext.complete(Unit)
-        }
     }
 }
 

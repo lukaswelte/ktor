@@ -1,5 +1,11 @@
 package io.ktor.config
 
+import io.ktor.util.*
+
+/**
+ * Mutable application config backed by a hash map
+ */
+@KtorExperimentalAPI
 class MapApplicationConfig : ApplicationConfig {
     private val map: MutableMap<String, String>
     private val path: String
@@ -12,10 +18,16 @@ class MapApplicationConfig : ApplicationConfig {
     constructor(vararg values: Pair<String, String>) : this(mutableMapOf(*values), "")
     constructor() : this(mutableMapOf<String, String>(), "")
 
+    /**
+     * Set property value
+     */
     fun put(path: String, value: String) {
-        map.put(path, value)
+        map[path] = value
     }
 
+    /**
+     * Put list property value
+     */
     fun put(path: String, values: Iterable<String>) {
         var size = 0
         values.forEachIndexed { i, value ->
@@ -26,23 +38,24 @@ class MapApplicationConfig : ApplicationConfig {
     }
 
     override fun property(path: String): ApplicationConfigValue {
-        val key = combine(this.path, path)
-        if (!map.containsKey(key) && !map.containsKey(combine(key, "size")))
-            throw ApplicationConfigurationException("Property $key not found.")
-        return MapApplicationConfigValue(map, key)
+        return propertyOrNull(path) ?: throw ApplicationConfigurationException("Property ${combine(this.path, path)} not found.")
     }
 
     override fun configList(path: String): List<ApplicationConfig> {
         val key = combine(this.path, path)
         val size = map[combine(key, "size")] ?: throw ApplicationConfigurationException("Property $key.size not found.")
-        return (0..size.toInt() - 1).map {
+        return (0 until size.toInt()).map {
             MapApplicationConfig(map, combine(key, it.toString()))
         }
     }
 
     override fun propertyOrNull(path: String): ApplicationConfigValue? {
         val key = combine(this.path, path)
-        return if (map.containsKey(key)) MapApplicationConfigValue(map, key) else null
+        return if (!map.containsKey(key) && !map.containsKey(combine(key, "size"))) {
+            null
+        } else {
+            MapApplicationConfigValue(map, key)
+        }
     }
 
     override fun config(path: String): ApplicationConfig = MapApplicationConfig(map, combine(this.path, path))
@@ -51,7 +64,7 @@ class MapApplicationConfig : ApplicationConfig {
         override fun getString(): String = map[path]!!
         override fun getList(): List<String> {
             val size = map[combine(path, "size")] ?: throw ApplicationConfigurationException("Property $path.size not found.")
-            return (0..size.toInt() - 1).map { map[combine(path, it.toString())]!! }
+            return (0 until size.toInt()).map { map[combine(path, it.toString())]!! }
         }
     }
 }

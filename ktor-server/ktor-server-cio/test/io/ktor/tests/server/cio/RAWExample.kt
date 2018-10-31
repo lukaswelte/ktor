@@ -3,13 +3,13 @@ package io.ktor.tests.server.cio
 import io.ktor.http.*
 import io.ktor.http.cio.*
 import io.ktor.server.cio.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
+import io.ktor.util.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 import java.time.*
 
-
 @Volatile
-private var cachedDateText: String = ZonedDateTime.now(ZoneOffset.UTC).toHttpDateString()
+private var cachedDateText: String = ZonedDateTime.now(GreenwichMeanTime).toHttpDateString()
 
 private val HelloWorld = "Hello, World!".toByteArray()
 private val HelloWorldLength = HelloWorld.size.toString()
@@ -26,17 +26,17 @@ private val notFound404_11 = RequestResponseBuilder().apply {
 fun main(args: Array<String>) {
     val settings = HttpServerSettings()
 
-    launch {
+    GlobalScope.launch {
         while (isActive) {
-            cachedDateText = ZonedDateTime.now(ZoneOffset.UTC).toHttpDateString()
+            cachedDateText = ZonedDateTime.now(GreenwichMeanTime).toHttpDateString()
             delay(1000)
         }
     }
 
-    val server = httpServer(settings, handler = { request: Request,
-                                                                     _: ByteReadChannel,
-                                                                     output: ByteWriteChannel,
-                                                                     _: CompletableDeferred<Boolean>? ->
+    val server = GlobalScope.httpServer(settings, handler = { request: Request,
+                                                                  _: ByteReadChannel,
+                                                                  output: ByteWriteChannel,
+                                                                  _: CompletableDeferred<Boolean>? ->
         try {
             if (request.uri.length == 1 && request.uri[0] == '/' && request.method == HttpMethod.Get) {
                 val response = RequestResponseBuilder()

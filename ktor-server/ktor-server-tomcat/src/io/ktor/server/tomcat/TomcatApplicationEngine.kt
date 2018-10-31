@@ -3,6 +3,8 @@ package io.ktor.server.tomcat
 import io.ktor.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.servlet.*
+import kotlinx.atomicfu.*
+import kotlinx.coroutines.*
 import org.apache.catalina.connector.*
 import org.apache.catalina.startup.Tomcat
 import org.apache.coyote.http2.*
@@ -14,14 +16,27 @@ import java.nio.file.*
 import java.util.concurrent.*
 import javax.servlet.*
 
-class TomcatApplicationEngine(environment: ApplicationEngineEnvironment, configure: Configuration.() -> Unit) : BaseApplicationEngine(environment) {
+/**
+ * Tomcat application engine that runs it in embedded mode
+ */
+class TomcatApplicationEngine(environment: ApplicationEngineEnvironment, configure: Configuration.() -> Unit) :
+    BaseApplicationEngine(environment) {
+    /**
+     * Tomcat engine specific configuration builder
+     */
     class Configuration : BaseApplicationEngine.Configuration() {
+        /**
+         * Property to provide a lambda that will be called
+         * during Tomcat server initialization with the server instance as argument.
+         */
         var configureTomcat: Tomcat.() -> Unit = {}
     }
 
     private val configuration = Configuration().apply(configure)
 
     private val tempDirectory by lazy { Files.createTempDirectory("ktor-server-tomcat-") }
+
+    private var cancellationDeferred: CompletableDeferred<Unit>? = null
 
     private val ktorServlet = object : KtorServlet() {
         override val enginePipeline: EnginePipeline
@@ -87,9 +102,12 @@ class TomcatApplicationEngine(environment: ApplicationEngineEnvironment, configu
         }
     }
 
+    private val stopped = atomic(false)
+
     override fun start(wait: Boolean): TomcatApplicationEngine {
         environment.start()
         server.start()
+        cancellationDeferred = stopServerOnCancellation()
         if (wait) {
             server.server.await()
             stop(1, 5, TimeUnit.SECONDS)
@@ -98,14 +116,26 @@ class TomcatApplicationEngine(environment: ApplicationEngineEnvironment, configu
     }
 
     override fun stop(gracePeriod: Long, timeout: Long, timeUnit: TimeUnit) {
-        environment.monitor.raise(ApplicationStopPreparing, environment)
-        server.stop()
-        environment.stop()
-        tempDirectory.toFile().deleteRecursively()
+        if (stopped.compareAndSet(false, true)) {
+            cancellationDeferred?.complete(Unit)
+            environment.monitor.raise(ApplicationStopPreparing, environment)
+            server.stop()
+            environment.stop()
+            server.destroy()
+            tempDirectory.toFile().deleteRecursively()
+        }
     }
 
     companion object {
-        private val nativeNames = listOf("netty-tcnative", "libnetty-tcnative", "netty-tcnative-1", "libnetty-tcnative-1", "tcnative-1", "libtcnative-1", "netty-tcnative-windows-x86_64")
+        private val nativeNames = listOf(
+            "netty-tcnative",
+            "libnetty-tcnative",
+            "netty-tcnative-1",
+            "libnetty-tcnative-1",
+            "tcnative-1",
+            "libtcnative-1",
+            "netty-tcnative-windows-x86_64"
+        )
 
         private fun chooseSSLImplementation(): Class<out SSLImplementation> {
             return try {

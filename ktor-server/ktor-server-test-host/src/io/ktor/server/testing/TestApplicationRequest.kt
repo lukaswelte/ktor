@@ -1,20 +1,30 @@
 package io.ktor.server.testing
 
-import io.ktor.application.*
-import io.ktor.content.*
 import io.ktor.http.*
+import io.ktor.http.content.*
 import io.ktor.request.*
 import io.ktor.server.engine.*
-import kotlinx.coroutines.experimental.io.*
-import java.io.*
+import io.ktor.util.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
+import kotlinx.coroutines.io.jvm.javaio.*
+import kotlinx.io.charsets.*
+import kotlinx.io.core.*
 
-class TestApplicationRequest(
-        call: ApplicationCall,
+/**
+ * Represents a test application request
+ *
+ * @property method HTTP method to be sent or executed
+ * @property uri HTTP url to sent request to or was sent to
+ * @property version HTTP version to sent or executed
+ * @property protocol HTTP protocol to be used or was used
+ */
+class TestApplicationRequest constructor(
+        call: TestApplicationCall,
         var method: HttpMethod = HttpMethod.Get,
         var uri: String = "/",
         var version: String = "HTTP/1.1"
-) : BaseApplicationRequest(call) {
-
+) : BaseApplicationRequest(call), CoroutineScope by call {
     var protocol: String = "http"
 
     override val local = object : RequestConnectionPoint {
@@ -40,24 +50,27 @@ class TestApplicationRequest(
             get() = this@TestApplicationRequest.version
     }
 
-    var bodyBytes: ByteArray = ByteArray(0)
-    var body: String
-        get() = bodyBytes.toString(Charsets.UTF_8)
-        set(newValue) {
-            bodyBytes = newValue.toByteArray(Charsets.UTF_8)
-        }
-
-    var multiPartEntries: List<PartData> = emptyList()
+    /**
+     * Request body channel
+     */
+    @Volatile
+    var bodyChannel: ByteReadChannel = ByteReadChannel.Empty
 
     override val queryParameters by lazy(LazyThreadSafetyMode.NONE) { parseQueryString(queryString()) }
 
+    override val cookies = RequestCookies(this)
+
     private var headersMap: MutableMap<String, MutableList<String>>? = hashMapOf()
+
+    /**
+     * Add HTTP request header
+     */
     fun addHeader(name: String, value: String) {
         val map = headersMap ?: throw Exception("Headers were already acquired for this request")
         map.getOrPut(name, { arrayListOf() }).add(value)
     }
 
-    override val headers : Headers by lazy(LazyThreadSafetyMode.NONE) {
+    override val headers: Headers by lazy(LazyThreadSafetyMode.NONE) {
         val map = headersMap ?: throw Exception("Headers were already acquired for this request")
         headersMap = null
         Headers.build {
@@ -67,33 +80,52 @@ class TestApplicationRequest(
         }
     }
 
-    override val cookies = RequestCookies(this)
+    override fun receiveChannel(): ByteReadChannel = bodyChannel
+}
 
-    override fun receiveContent() = TestIncomingContent(this)
-    override fun receiveChannel(): ByteReadChannel {
-        return ByteReadChannel(bodyBytes)
-    }
+/**
+ * Set HTTP request body text content
+ */
+fun TestApplicationRequest.setBody(value: String) {
+    setBody(value.toByteArray())
+}
 
-    class TestIncomingContent(private val request: TestApplicationRequest) : IncomingContent {
-        override val headers: Headers = request.headers
+/**
+ * Set HTTP request body bytes
+ */
+fun TestApplicationRequest.setBody(value: ByteArray) {
+    bodyChannel = ByteReadChannel(value)
+}
 
-        override fun readChannel() = ByteReadChannel(request.bodyBytes)
-        override fun inputStream(): InputStream = ByteArrayInputStream(request.bodyBytes)
+/**
+ * Set multipart HTTP request body
+ */
+fun TestApplicationRequest.setBody(boundary: String, parts: List<PartData>) {
+    bodyChannel = writer(Dispatchers.IO) {
+        if (parts.isEmpty()) return@writer
 
-        override fun multiPartData(): MultiPartData = object : MultiPartData {
-            private val items by lazy { request.multiPartEntries.iterator() }
-
-            override val parts: Sequence<PartData>
-                get() = when {
-                    request.isMultipart() -> request.multiPartEntries.asSequence()
-                    else -> throw IOException("The request content is not multipart encoded")
+        try {
+            append("\r\n\r\n")
+            parts.forEach {
+                append("--$boundary\r\n")
+                for ((key, values) in it.headers.entries()) {
+                    append("$key: ${values.joinToString(";")}\r\n")
                 }
-
-            override suspend fun readPart() = when {
-                !request.isMultipart() -> throw IOException("The request content is not multipart encoded")
-                items.hasNext() -> items.next()
-                else -> null
+                append("\r\n")
+                when (it) {
+                    is PartData.FileItem -> it.provider().asStream().copyTo(channel.toOutputStream())
+                    is PartData.FormItem -> append(it.value)
+                }
+                append("\r\n")
             }
+
+            append("--$boundary--\r\n\r\n")
+        } finally {
+            parts.forEach { it.dispose() }
         }
-    }
+    }.channel
+}
+
+private suspend fun WriterScope.append(str: String, charset: Charset = Charsets.UTF_8) {
+    channel.writeFully(str.toByteArray(charset))
 }

@@ -1,46 +1,45 @@
 package io.ktor.server.servlet
 
 import io.ktor.application.*
-import io.ktor.cio.*
-import io.ktor.content.*
+import io.ktor.util.cio.*
+import io.ktor.http.content.*
 import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.server.engine.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
-import java.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 import javax.servlet.*
 import javax.servlet.http.*
+import kotlin.coroutines.*
 
-class BlockingServletApplicationCall(
+internal class BlockingServletApplicationCall(
     application: Application,
     servletRequest: HttpServletRequest,
-    servletResponse: HttpServletResponse
-) : BaseApplicationCall(application) {
+    servletResponse: HttpServletResponse,
+    override val coroutineContext: CoroutineContext
+) : BaseApplicationCall(application), CoroutineScope {
     override val request: ApplicationRequest = BlockingServletApplicationRequest(this, servletRequest)
-    override val response: ApplicationResponse = BlockingServletApplicationResponse(this, servletResponse)
+    override val response: ApplicationResponse =
+        BlockingServletApplicationResponse(this, servletResponse, coroutineContext)
 }
 
 private class BlockingServletApplicationRequest(
     call: ApplicationCall,
     servletRequest: HttpServletRequest
 ) : ServletApplicationRequest(call, servletRequest) {
-    override fun receiveContent(): IncomingContent = BlockingServletIncomingContent(this)
-    override fun receiveChannel() = servletRequest.inputStream.toByteReadChannel()
-}
 
-private class BlockingServletIncomingContent(
-    request: BlockingServletApplicationRequest
-) : ServletIncomingContent(request) {
-    override fun readChannel(): ByteReadChannel = inputStream().toByteReadChannel()
+    private val inputStreamChannel by lazy { servletRequest.inputStream.toByteReadChannel(context = UnsafeBlockingTrampoline) }
+
+    override fun receiveChannel() = inputStreamChannel
 }
 
 private class BlockingServletApplicationResponse(
     call: ApplicationCall,
-    servletResponse: HttpServletResponse
-) : ServletApplicationResponse(call, servletResponse) {
+    servletResponse: HttpServletResponse,
+    override val coroutineContext: CoroutineContext
+) : ServletApplicationResponse(call, servletResponse), CoroutineScope {
     override fun createResponseJob(): ReaderJob =
-        reader(Unconfined) {
+        reader(UnsafeBlockingTrampoline, autoFlush = false) {
             val buffer = ArrayPool.borrow()
             try {
                 writeLoop(buffer, channel, servletResponse.outputStream)
@@ -49,6 +48,7 @@ private class BlockingServletApplicationResponse(
             }
         }
 
+    @Suppress("BlockingMethodInNonBlockingContext")
     private suspend fun writeLoop(buffer: ByteArray, from: ByteReadChannel, to: ServletOutputStream) {
         while (true) {
             val n = from.readAvailable(buffer)
@@ -57,15 +57,28 @@ private class BlockingServletApplicationResponse(
             try {
                 to.write(buffer, 0, n)
                 to.flush()
-            } catch (e: IOException) {
-                throw ChannelIOException("Failed to write to ServletOutputStream", e)
+            } catch (cause: Throwable) {
+                throw ChannelWriteException("Failed to write to ServletOutputStream", cause)
             }
         }
     }
 
     override suspend fun respondUpgrade(upgrade: OutgoingContent.ProtocolUpgrade) {
+        @Suppress("BlockingMethodInNonBlockingContext")
         servletResponse.sendError(501, "Upgrade is not supported in synchronous servlets")
     }
 }
 
+
+/**
+ * Never do like this! Very special corner-case.
+ */
+@UseExperimental(ExperimentalCoroutinesApi::class)
+private object UnsafeBlockingTrampoline : CoroutineDispatcher() {
+    override fun isDispatchNeeded(context: CoroutineContext): Boolean = true
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        block.run()
+    }
+}
 

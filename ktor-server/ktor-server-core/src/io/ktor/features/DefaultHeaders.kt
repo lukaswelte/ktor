@@ -17,7 +17,7 @@ class DefaultHeaders(config: Configuration) {
     private val zoneUTCRules = UTC.rules
 
     private var cachedDateTimeStamp: Long = 0L
-    @Volatile private var cachedDateText: String = ZonedDateTime.now(ZoneOffset.UTC).toHttpDateString()
+    @Volatile private var cachedDateText: String = ZonedDateTime.now(GreenwichMeanTime).toHttpDateString()
 
     /**
      * Configuration for [DefaultHeaders] feature.
@@ -26,7 +26,7 @@ class DefaultHeaders(config: Configuration) {
         /**
          * Provides a builder to append any custom headers to be sent with each request
          */
-        val headers = HeadersBuilder()
+        internal val headers = HeadersBuilder()
 
         /**
          * Adds standard header property [name] with the specified [value].
@@ -79,7 +79,7 @@ class DefaultHeaders(config: Configuration) {
             }
 
             val feature = DefaultHeaders(config)
-            pipeline.intercept(ApplicationCallPipeline.Infrastructure) { feature.intercept(call) }
+            pipeline.intercept(ApplicationCallPipeline.Features) { feature.intercept(call) }
             return feature
         }
     }

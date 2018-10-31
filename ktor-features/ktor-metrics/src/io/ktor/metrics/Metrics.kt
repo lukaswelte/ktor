@@ -3,7 +3,7 @@ package io.ktor.metrics
 import com.codahale.metrics.*
 import com.codahale.metrics.jvm.*
 import io.ktor.application.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.routing.*
 import io.ktor.util.*
 import java.util.concurrent.*
@@ -37,7 +37,7 @@ class Metrics(val registry: MetricRegistry) {
             configuration.registry.register("jvm.attributes", JvmAttributeGaugeSet())
 
             val phase = PipelinePhase("Metrics")
-            pipeline.insertPhaseBefore(ApplicationCallPipeline.Infrastructure, phase)
+            pipeline.insertPhaseBefore(ApplicationCallPipeline.Monitoring, phase)
             pipeline.intercept(phase) {
                 feature.before(call)
                 try {

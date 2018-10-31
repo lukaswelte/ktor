@@ -3,19 +3,30 @@ package io.ktor.client.features
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.response.*
-import io.ktor.content.*
 import io.ktor.http.*
+import io.ktor.http.content.*
 import io.ktor.util.*
-import java.nio.charset.*
+import kotlinx.io.charsets.*
+import kotlinx.io.core.*
 
+/**
+ * [HttpClient] feature that encodes [String] request bodies to [TextContent]
+ * using a specific charset defined at [HttpPlainText.defaultCharset].
+ * And also processes the response body as [String].
+ *
+ * NOTE: the [HttpPlainText.defaultCharset] is the default one for your JVM so can change between servers!
+ *       So please, specify one if you want consistent results in all your deployments.
+ */
+class HttpPlainText(var defaultCharset: Charset) {
 
-class HttpPlainText(private val defaultCharset: Charset) {
-    suspend fun read(response: HttpResponse): String = response.readText(charset = defaultCharset)
+    internal suspend fun read(response: HttpResponse): String = response.use {
+        it.readText(charset = defaultCharset)
+    }
 
     class Config {
-        var defaultCharset: Charset = Charset.defaultCharset()
+        var defaultCharset: Charset = Charsets.UTF_8
 
-        fun build(): HttpPlainText = HttpPlainText(defaultCharset)
+        internal fun build(): HttpPlainText = HttpPlainText(defaultCharset)
     }
 
     companion object Feature : HttpClientFeature<Config, HttpPlainText> {
@@ -30,9 +41,10 @@ class HttpPlainText(private val defaultCharset: Charset) {
                 proceedWith(TextContent(content, contentType))
             }
 
-            scope.responsePipeline.intercept(HttpResponsePipeline.Parse) { (expectedType, response) ->
-                if (expectedType != String::class || response !is HttpResponse) return@intercept
-                proceedWith(HttpResponseContainer(expectedType, feature.read(response)))
+            scope.responsePipeline.intercept(HttpResponsePipeline.Parse) { (info, response) ->
+                if (info.type != String::class || response !is HttpResponse) return@intercept
+
+                proceedWith(HttpResponseContainer(info, feature.read(response)))
             }
         }
     }

@@ -1,3 +1,5 @@
+@file:UseExperimental(KtorExperimentalLocationsAPI::class)
+
 package io.ktor.tests.locations
 
 import io.ktor.application.*
@@ -18,7 +20,7 @@ private fun withLocationsApplication(test: TestApplicationEngine.() -> Unit) = w
 }
 
 class CustomLocationRouteService : LocationRouteService {
-    override fun findRoute(klass: KClass<*>): String? = klass.simpleName
+    override fun findRoute(locationClass: KClass<*>): String? = locationClass.simpleName
 }
 
 object CustomLocationsFeature : ApplicationFeature<Application, Locations, Locations> {
@@ -37,6 +39,7 @@ class entity(val id: EntityID)
 
 data class EntityID(val typeId: Int, val entityId: Int)
 
+@UseExperimental(KtorExperimentalLocationsAPI::class)
 class CustomLocationsTest {
 
     @Test
@@ -71,7 +74,7 @@ class CustomLocationsTest {
         application.install(Locations)
         application.install(DataConversion) {
             convert<EntityID> {
-                decode { values, type ->
+                decode { values, _ ->
                     val (typeId, entityId) = values.single().split('-').map { it.toInt() }
                     EntityID(typeId, entityId)
                 }
@@ -98,5 +101,4 @@ class CustomLocationsTest {
         urlShouldBeHandled(href)
         urlShouldBeUnhandled("/")
     }
-
 }

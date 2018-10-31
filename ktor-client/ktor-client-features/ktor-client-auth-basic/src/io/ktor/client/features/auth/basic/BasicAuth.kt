@@ -4,16 +4,28 @@ import io.ktor.client.*
 import io.ktor.client.features.*
 import io.ktor.client.request.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
 import io.ktor.util.*
 
+/**
+ * [HttpClient] feature that sets an `Authorization: basic` header
+ * as specified in RFC-2617 using [username] and [password].
+ *
+ * https://www.ietf.org/rfc/rfc2617.txt
+ */
 class BasicAuth(val username: String, val password: String) {
 
     class Configuration {
+        /**
+         * Required: The username of the basic auth.
+         */
         lateinit var username: String
+
+        /**
+         * Required: The password of the basic auth.
+         */
         lateinit var password: String
 
-        fun build(): BasicAuth = BasicAuth(username, password)
+        internal fun build(): BasicAuth = BasicAuth(username, password)
     }
 
     companion object Feature : HttpClientFeature<Configuration, BasicAuth> {
@@ -23,10 +35,9 @@ class BasicAuth(val username: String, val password: String) {
         override fun prepare(block: Configuration.() -> Unit): BasicAuth = Configuration().apply(block).build()
 
         override fun install(feature: BasicAuth, scope: HttpClient) {
-            scope.requestPipeline.intercept(HttpRequestPipeline.State) { request: HttpRequestBuilder ->
-                if (request.headers.getAll(HttpHeaders.Authorization) != null) return@intercept
-
-                request.headers.append(HttpHeaders.Authorization, constructBasicAuthValue(feature.username, feature.password))
+            scope.requestPipeline.intercept(HttpRequestPipeline.State) {
+                if (context.headers.getAll(HttpHeaders.Authorization) != null) return@intercept
+                context.headers.append(HttpHeaders.Authorization, constructBasicAuthValue(feature.username, feature.password))
             }
         }
 

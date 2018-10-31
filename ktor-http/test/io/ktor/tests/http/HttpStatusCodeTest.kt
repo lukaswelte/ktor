@@ -1,13 +1,12 @@
 package io.ktor.tests.http
 
 import io.ktor.http.*
-import org.junit.Test
 import kotlin.test.*
 
 class HttpStatusCodeTest {
     @Test
     fun HttpStatusCodeAll() {
-        assertEquals(47, HttpStatusCode.allStatusCodes.size)
+        assertEquals(52, HttpStatusCode.allStatusCodes.size)
     }
 
     @Test

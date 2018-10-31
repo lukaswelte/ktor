@@ -1,17 +1,17 @@
 package io.ktor.server.servlet
 
-import io.ktor.cio.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.Channel
-import kotlinx.coroutines.experimental.io.*
+import io.ktor.util.cio.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.io.*
 import java.io.*
+import java.util.concurrent.TimeoutException
 import javax.servlet.*
-import kotlin.coroutines.experimental.*
 
-internal fun servletReader(input: ServletInputStream, parent: CoroutineContext? = null): WriterJob {
+internal fun CoroutineScope.servletReader(input: ServletInputStream): WriterJob {
     val reader = ServletReader(input)
 
-    return writer(if (parent != null) Unconfined + parent else Unconfined, reader.channel) {
+    return writer(Dispatchers.Unconfined, reader.channel) {
         reader.run()
     }
 }
@@ -24,6 +24,16 @@ private class ServletReader(val input: ServletInputStream) : ReadListener {
         val buffer = ArrayPool.borrow()
         try {
             input.setReadListener(this)
+            if (input.isFinished) {
+                // setting read listener on already completed stream could cause it to hang
+                // it is not by Servlet API spec but it actually works like this
+                // it is relatively dangerous to touch isFinished due to async processing
+                // if the servlet container call us onAllDataRead then it we will close events again that is safe
+                events.close()
+                return
+            }
+            @Suppress("DEPRECATION")
+            @UseExperimental(ExperimentalCoroutinesApi::class, ObsoleteCoroutinesApi::class)
             events.receiveOrNull() ?: return
             loop(buffer)
 
@@ -32,11 +42,13 @@ private class ServletReader(val input: ServletInputStream) : ReadListener {
         } catch (t: Throwable) {
             onError(t)
         } finally {
-            input.close()
+            @Suppress("BlockingMethodInNonBlockingContext")
+            input.close() // ServletInputStream is in non-blocking mode
             ArrayPool.recycle(buffer)
         }
     }
 
+    @Suppress("BlockingMethodInNonBlockingContext")
     private suspend fun loop(buffer: ByteArray) {
         while (true) {
             if (input.isReady) {
@@ -49,6 +61,8 @@ private class ServletReader(val input: ServletInputStream) : ReadListener {
                 channel.writeFully(buffer, 0, rc)
             } else {
                 channel.flush()
+                @Suppress("DEPRECATION")
+                @UseExperimental(ExperimentalCoroutinesApi::class, ObsoleteCoroutinesApi::class)
                 events.receiveOrNull() ?: break
             }
         }
@@ -68,9 +82,7 @@ private class ServletReader(val input: ServletInputStream) : ReadListener {
     override fun onDataAvailable() {
         try {
             if (!events.offer(Unit)) {
-                runBlocking(Unconfined) {
-                    events.send(Unit)
-                }
+                events.sendBlocking(Unit)
             }
         } catch (ignore: Throwable) {
         }
@@ -79,7 +91,8 @@ private class ServletReader(val input: ServletInputStream) : ReadListener {
     private fun wrapException(t: Throwable): Throwable? {
         return when (t) {
             is EOFException -> null
-            is IOException -> ChannelReadException("Cannot read from a servlet input stream", exception = t)
+            is TimeoutException,
+            is IOException -> ChannelReadException("Cannot read from a servlet input stream", exception = t as Exception)
             else -> t
         }
     }

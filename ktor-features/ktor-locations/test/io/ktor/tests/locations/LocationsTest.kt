@@ -1,19 +1,24 @@
 package io.ktor.tests.locations
 
 import io.ktor.application.*
+import io.ktor.features.*
 import io.ktor.http.*
 import io.ktor.locations.*
 import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.testing.*
+import io.ktor.util.*
 import org.junit.Test
+import java.math.*
 import kotlin.test.*
 
+@UseExperimental(KtorExperimentalLocationsAPI::class)
 private fun withLocationsApplication(test: TestApplicationEngine.() -> Unit) = withTestApplication {
     application.install(Locations)
     test()
 }
 
+@UseExperimental(KtorExperimentalLocationsAPI::class)
 class LocationsTest {
     @Location("/") class index()
 
@@ -122,7 +127,7 @@ class LocationsTest {
                 assertEquals(123, items.container.id)
                 call.respond(HttpStatusCode.OK)
             }
-            assertFailsWith(RoutingException::class) {
+            assertFailsWith(LocationRoutingException::class) {
                 get<pathContainer.badItems> { }
             }
         }
@@ -145,7 +150,7 @@ class LocationsTest {
                 assertEquals(123, items.container.id)
                 call.respond(HttpStatusCode.OK)
             }
-            assertFailsWith(RoutingException::class) {
+            assertFailsWith(LocationRoutingException::class) {
                 get<queryContainer.badItems> { }
             }
         }
@@ -342,11 +347,9 @@ class LocationsTest {
         urlShouldBeHandled("/", "http://localhost/container?id=1&optional=ok")
     }
 
-    @Location("/")
-    object root
+    @Location("/") object root
 
-    @Test
-    fun `location root by object`() = withLocationsApplication {
+    @Test fun `location root by object`() = withLocationsApplication {
         val href = application.locations.href(root)
         assertEquals("/", href)
         application.routing {
@@ -358,11 +361,9 @@ class LocationsTest {
         urlShouldBeUnhandled("/index")
     }
 
-    @Location("/help")
-    object help
+    @Location("/help") object help
 
-    @Test
-    fun `location by object`() = withLocationsApplication {
+    @Test fun `location by object`() = withLocationsApplication {
         val href = application.locations.href(help)
         assertEquals("/help", href)
         application.routing {
@@ -374,17 +375,12 @@ class LocationsTest {
         urlShouldBeUnhandled("/help/123")
     }
 
-    @Location("/users")
-    object users {
-        @Location("/me")
-        object me
-
-        @Location("/{id}")
-        class user(val id: Int)
+    @Location("/users") object users {
+        @Location("/me") object me
+        @Location("/{id}") class user(val id: Int)
     }
 
-    @Test
-    fun `location by object in object`() = withLocationsApplication {
+    @Test fun `location by object in object`() = withLocationsApplication {
         val href = application.locations.href(users.me)
         assertEquals("/users/me", href)
         application.routing {
@@ -396,8 +392,7 @@ class LocationsTest {
         urlShouldBeUnhandled("/users/123")
     }
 
-    @Test
-    fun `location by class in object`() = withLocationsApplication {
+    @Test fun `location by class in object`() = withLocationsApplication {
         val href = application.locations.href(users.user(123))
         assertEquals("/users/123", href)
         application.routing {
@@ -410,13 +405,72 @@ class LocationsTest {
         urlShouldBeUnhandled("/users/me")
     }
 
-    @Location("/items/{id}")
-    object items
+    @Location("/items/{id}") object items
 
-    @Test(expected = IllegalArgumentException::class)
-    fun `location by object has bind argument`() = withLocationsApplication {
-        application.locations.href(items)
+    @Test(expected = IllegalArgumentException::class) fun `location by object has bind argument`() =
+            withLocationsApplication {
+                application.locations.href(items)
+            }
+
+    @Location("/items/{itemId}/{extra?}") class OverlappingPath1(val itemId: Int, val extra: String?)
+
+    @Location("/items/{extra}") class OverlappingPath2(val extra: String)
+
+    @Test fun `overlapping paths are resolved as expected`() = withLocationsApplication {
+        application.install(CallLogging)
+        application.routing {
+            get<OverlappingPath1> {
+                call.respond(HttpStatusCode.OK)
+            }
+            get<OverlappingPath2> {
+                call.respond(HttpStatusCode.OK)
+            }
+        }
+        urlShouldBeHandled(application.locations.href(OverlappingPath1(1, "Foo")))
+        urlShouldBeUnhandled(application.locations.href(OverlappingPath2("1-Foo")))
     }
 
+    enum class LocationEnum {
+        A, B, C
+    }
+
+    @Location("/") class LocationWithEnum(val e: LocationEnum)
+
+    @Test fun `location class with enum value`() = withLocationsApplication {
+        application.routing {
+            get<LocationWithEnum> {
+                call.respondText(call.locations.resolve<LocationWithEnum>(LocationWithEnum::class, call).e.name)
+            }
+        }
+
+        urlShouldBeHandled("/?e=A", "A")
+        urlShouldBeHandled("/?e=B", "B")
+
+        val t = assertFailsWith<DataConversionException> {
+            handleRequest(HttpMethod.Get, "/?e=x")
+        }
+
+        assertTrue { "LocationEnum" in t.message!! }
+        assertTrue { "x" in t.message!! }
+    }
+
+    @Location("/") class LocationWithBigNumbers(val bd: BigDecimal, val bi: BigInteger)
+
+    @Test fun `location class with big numbers`() = withLocationsApplication {
+        val bd = BigDecimal("123456789012345678901234567890")
+        val bi = BigInteger("123456789012345678901234567890")
+
+        application.routing {
+            get<LocationWithBigNumbers> { location ->
+                assertEquals(bd, location.bd)
+                assertEquals(bi, location.bi)
+
+                call.respondText(call.locations.href(location))
+            }
+        }
+
+        urlShouldBeHandled("/?bd=123456789012345678901234567890&bi=123456789012345678901234567890",
+            "/?bd=123456789012345678901234567890&bi=123456789012345678901234567890")
+    }
 }
 

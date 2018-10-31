@@ -1,17 +1,17 @@
 package io.ktor.server.servlet
 
-import io.ktor.cio.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.*
-import kotlinx.coroutines.experimental.io.*
+import io.ktor.util.cio.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.io.*
 import kotlinx.io.pool.*
 import java.io.*
+import java.util.concurrent.TimeoutException
 import javax.servlet.*
-import kotlin.coroutines.experimental.*
 
-internal fun servletWriter(output: ServletOutputStream, parent: CoroutineContext? = null) : ReaderJob {
+internal fun CoroutineScope.servletWriter(output: ServletOutputStream) : ReaderJob {
     val writer = ServletWriter(output)
-    return reader(if (parent != null) Unconfined + parent else Unconfined, writer.channel) {
+    return reader(Dispatchers.Unconfined, writer.channel) {
         writer.run()
     }
 }
@@ -48,16 +48,17 @@ private class ServletWriter(val output: ServletOutputStream) : WriteListener {
             onError(t)
         } finally {
             events.close()
-            output.close()
         }
     }
 
+    @Suppress("BlockingMethodInNonBlockingContext")
     private suspend fun finish() {
         awaitReady()
         output.flush()
         awaitReady()
     }
 
+    @Suppress("BlockingMethodInNonBlockingContext")
     private suspend fun loop(buffer: ByteArray) {
         if (channel.availableForRead == 0) {
             awaitReady()
@@ -97,22 +98,21 @@ private class ServletWriter(val output: ServletOutputStream) : WriteListener {
     override fun onWritePossible() {
         try {
             if (!events.offer(Unit)) {
-                launch(Unconfined) {
-                    events.send(Unit)
-                }
+                events.sendBlocking(Unit)
             }
         } catch (ignore: Throwable) {
         }
     }
 
     override fun onError(t: Throwable) {
-        events.close(t)
-        channel.close(wrapException(t))
+        val wrapped = wrapException(t)
+        events.close(wrapped)
+        channel.cancel(wrapped)
     }
 
-    private fun wrapException(t: Throwable): Throwable {
-        return if (t is IOException) {
-            ChannelWriteException(exception = t)
-        } else t
+    private fun wrapException(cause: Throwable): Throwable {
+        return if (cause is IOException || cause is TimeoutException) {
+            ChannelWriteException("Failed to write to servlet async stream", exception = cause)
+        } else cause
     }
 }

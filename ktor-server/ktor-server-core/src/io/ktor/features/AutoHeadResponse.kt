@@ -1,12 +1,15 @@
 package io.ktor.features
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.response.*
 import io.ktor.util.*
 
+/**
+ * A feature that automatically respond to HEAD requests
+ */
 object AutoHeadResponse : ApplicationFeature<ApplicationCallPipeline, Unit, Unit> {
     private val HeadPhase = PipelinePhase("HEAD")
 
@@ -15,7 +18,7 @@ object AutoHeadResponse : ApplicationFeature<ApplicationCallPipeline, Unit, Unit
     override fun install(pipeline: ApplicationCallPipeline, configure: Unit.() -> Unit) {
         Unit.configure()
 
-        pipeline.intercept(ApplicationCallPipeline.Infrastructure) {
+        pipeline.intercept(ApplicationCallPipeline.Features) {
             if (call.request.local.method == HttpMethod.Head) {
                 call.response.pipeline.insertPhaseBefore(ApplicationSendPipeline.TransferEncoding, HeadPhase)
                 call.response.pipeline.intercept(HeadPhase) { message ->

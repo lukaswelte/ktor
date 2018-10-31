@@ -1,13 +1,13 @@
 package io.ktor.client.tests.cio
 
-import io.ktor.client.cio.*
-import kotlinx.coroutines.experimental.*
+import io.ktor.util.cio.*
+import kotlinx.coroutines.*
 import org.junit.Test
 import java.util.concurrent.atomic.*
 import kotlin.test.*
 
 const val TEST_SIZE = 100
-const val FAIL_TIMEOUT = 100
+const val FAIL_TIMEOUT = 100L
 
 class SemaphoreTest {
 

@@ -1,15 +1,16 @@
 package io.ktor.jackson
 
+import com.fasterxml.jackson.core.util.*
 import com.fasterxml.jackson.databind.*
 import com.fasterxml.jackson.module.kotlin.*
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.features.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.request.*
-import kotlinx.coroutines.experimental.io.*
-import kotlinx.coroutines.experimental.io.jvm.javaio.*
+import kotlinx.coroutines.io.*
+import kotlinx.coroutines.io.jvm.javaio.*
 
 /**
  *    install(ContentNegotiation) {
@@ -40,9 +41,19 @@ class JacksonConverter(private val objectmapper: ObjectMapper = jacksonObjectMap
     }
 }
 
-fun ContentNegotiation.Configuration.jackson(block: ObjectMapper.() -> Unit) {
+/**
+ * Register Jackson converter into [ContentNegotiation] feature
+ */
+fun ContentNegotiation.Configuration.jackson(contentType: ContentType = ContentType.Application.Json,
+                                             block: ObjectMapper.() -> Unit = {}) {
     val mapper = jacksonObjectMapper()
+    mapper.apply {
+        setDefaultPrettyPrinter(DefaultPrettyPrinter().apply {
+            indentArraysWith(DefaultPrettyPrinter.FixedSpaceIndenter.instance)
+            indentObjectsWith(DefaultIndenter("  ", "\n"))
+        })
+    }
     mapper.apply(block)
     val converter = JacksonConverter(mapper)
-    register(ContentType.Application.Json, converter)
+    register(contentType, converter)
 }

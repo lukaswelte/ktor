@@ -1,7 +1,7 @@
 package io.ktor.application
 
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.internal.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.internal.*
 import java.util.concurrent.*
 
 /**
@@ -47,6 +47,7 @@ class ApplicationEvents {
         exception?.let { throw it }
     }
 
+    @UseExperimental(InternalCoroutinesApi::class)
     private class HandlerRegistration(val handler: EventHandler<*>) : LockFreeLinkedListNode(), DisposableHandle {
         override fun dispose() {
             remove()

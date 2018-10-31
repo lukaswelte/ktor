@@ -1,10 +1,15 @@
 package io.ktor.server.servlet
 
 import io.ktor.http.*
+import io.ktor.server.engine.*
 import java.util.*
 import javax.servlet.http.*
 
-class ServletApplicationRequestHeaders(val servletRequest: HttpServletRequest) : Headers {
+@Suppress("KDocMissingDocumentation")
+@EngineAPI
+class ServletApplicationRequestHeaders(
+    private val servletRequest: HttpServletRequest
+) : Headers {
     override fun getAll(name: String): List<String> {
         val headersEnumeration = servletRequest.getHeaders(name) ?: return emptyList()
         if (!headersEnumeration.hasMoreElements()) return emptyList()

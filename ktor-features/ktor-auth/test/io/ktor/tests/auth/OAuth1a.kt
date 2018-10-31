@@ -11,7 +11,7 @@ import io.ktor.routing.*
 import io.ktor.server.testing.*
 import io.ktor.server.testing.client.*
 import io.ktor.util.*
-import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.*
 import org.junit.*
 import org.junit.Test
 import java.time.*
@@ -114,7 +114,7 @@ class OAuth1aFlowTest {
         testClient = null
     }
 
-    val executor = Executors.newSingleThreadExecutor()
+    val executor = Executors.newSingleThreadExecutor()!!
     private val dispatcher = executor.asCoroutineDispatcher()
 
     private val settings = OAuthServerSettings.OAuth1aServerSettings(
@@ -206,9 +206,9 @@ class OAuth1aFlowTest {
             waitExecutor()
 
             assertTrue(result.requestHandled, "request should be handled")
-            assertEquals(HttpStatusCode.OK, result.response.status())
-            assertTrue { result.response.content!!.startsWith("Ho, ") }
-            assertTrue { result.response.content!!.contains("null") }
+            assertEquals(HttpStatusCode.Found, result.response.status())
+            assertNotNull(result.response.headers[HttpHeaders.Location])
+            assertTrue { result.response.headers[HttpHeaders.Location]!!.startsWith("https://login-server-com/oauth/authorize") }
         }
     }
 
@@ -272,13 +272,17 @@ class OAuth1aFlowTest {
     }
 
     private fun Application.configureServer(redirectUrl: String = "http://localhost/login?redirected=true", mutateSettings: OAuthServerSettings.OAuth1aServerSettings.() -> OAuthServerSettings.OAuth1aServerSettings = { this }) {
-        routing {
-            route("/login", HttpMethod.Get) {
-                authentication {
-                    oauth(testClient!!, dispatcher, { settings.mutateSettings() }, { redirectUrl })
-                }
+        install(Authentication) {
+            oauth {
+                client = testClient!!
+                providerLookup = { settings.mutateSettings() }
+                urlProvider = { redirectUrl }
+            }
+        }
 
-                handle {
+        routing {
+            authenticate {
+                get("/login") {
                     call.respondText("Ho, ${call.authentication.principal}")
                 }
             }
@@ -311,7 +315,8 @@ private fun createOAuthServer(server: TestingOAuthServer): HttpClient {
         module {
             routing {
                 post("/oauth/request_token") {
-                    val authHeader = call.request.parseAuthorizationHeader() ?: throw IllegalArgumentException("No auth header found")
+                    val authHeader = call.request.parseAuthorizationHeader()
+                            ?: throw IllegalArgumentException("No auth header found")
 
                     assertEquals(AuthScheme.OAuth, authHeader.authScheme, "This is not an OAuth request")
                     if (authHeader !is HttpAuthHeader.Parameterized) {
@@ -319,7 +324,7 @@ private fun createOAuthServer(server: TestingOAuthServer): HttpClient {
                         return@post
                     }
 
-                    val callback = authHeader.parameter(HttpAuthHeader.Parameters.OAuthCallback)?.let { decodeURLPart(it) }
+                    val callback = authHeader.parameter(HttpAuthHeader.Parameters.OAuthCallback)?.decodeURLPart()
                     val consumerKey = authHeader.requireParameter(HttpAuthHeader.Parameters.OAuthConsumerKey)
                     val nonce = authHeader.requireParameter(HttpAuthHeader.Parameters.OAuthNonce)
                     val signatureMethod = authHeader.requireParameter(HttpAuthHeader.Parameters.OAuthSignatureMethod)
@@ -345,7 +350,8 @@ private fun createOAuthServer(server: TestingOAuthServer): HttpClient {
                     }
                 }
                 post("/oauth/access_token") {
-                    val authHeader = call.request.parseAuthorizationHeader() ?: throw IllegalArgumentException("No auth header found")
+                    val authHeader = call.request.parseAuthorizationHeader()
+                            ?: throw IllegalArgumentException("No auth header found")
                     assertEquals(AuthScheme.OAuth, authHeader.authScheme, "This is not an OAuth request")
                     if (authHeader !is HttpAuthHeader.Parameterized) {
                         throw IllegalStateException("Bad OAuth header supplied: should be parameterized auth header but token68 blob found")
@@ -368,7 +374,8 @@ private fun createOAuthServer(server: TestingOAuthServer): HttpClient {
                     }
 
                     val values = call.receiveParameters()
-                    val verifier = values[HttpAuthHeader.Parameters.OAuthVerifier] ?: throw IllegalArgumentException("oauth_verified is not provided in the POST request body")
+                    val verifier = values[HttpAuthHeader.Parameters.OAuthVerifier]
+                            ?: throw IllegalArgumentException("oauth_verified is not provided in the POST request body")
 
                     try {
                         val tokenPair = server.accessToken(call, consumerKey, nonce, signature, signatureMethod, timestamp, token, verifier)
@@ -383,7 +390,8 @@ private fun createOAuthServer(server: TestingOAuthServer): HttpClient {
                     }
                 }
                 post("/oauth/authorize") {
-                    val oauthToken = call.parameters[HttpAuthHeader.Parameters.OAuthToken] ?: throw IllegalArgumentException("No oauth_token parameter specified")
+                    val oauthToken = call.parameters[HttpAuthHeader.Parameters.OAuthToken]
+                            ?: throw IllegalArgumentException("No oauth_token parameter specified")
                     server.authorize(call, oauthToken)
                     call.response.status(HttpStatusCode.OK)
                 }
@@ -402,6 +410,7 @@ private suspend fun ApplicationCall.fail(text: String?) {
     respondText(message)
 }
 
-private fun HttpAuthHeader.Parameterized.requireParameter(name: String) = parameter(name)?.let { decodeURLPart(it) } ?: throw IllegalArgumentException("No $name parameter specified in OAuth header")
+private fun HttpAuthHeader.Parameterized.requireParameter(name: String): String = parameter(name)?.decodeURLPart()
+        ?: throw IllegalArgumentException("No $name parameter specified in OAuth header")
 
 data class TestOAuthTokenResponse(val callbackConfirmed: Boolean, val token: String, val tokenSecret: String)

@@ -1,13 +1,15 @@
 package io.ktor.server.engine
 
 import io.ktor.application.*
-import io.ktor.cio.*
-import io.ktor.content.*
+import io.ktor.util.cio.*
+import io.ktor.http.content.*
 import io.ktor.features.*
 import io.ktor.http.*
 import io.ktor.response.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
+import kotlinx.io.pool.*
+import java.nio.*
 
 /**
  * Base class for implementing an [ApplicationResponse]
@@ -38,6 +40,9 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
         }
     }
 
+    /**
+     * Commit header values and status and pass them to the underlying engine
+     */
     protected fun commitHeaders(content: OutgoingContent) {
         responded = true
 
@@ -63,7 +68,7 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
         when {
             contentLength != null -> {
                 // TODO: What should we do if TransferEncoding was set and length is present?
-                headers.append(HttpHeaders.ContentLength, contentLength.toString(), safeOnly = false)
+                headers.append(HttpHeaders.ContentLength, contentLength.toStringFast(), safeOnly = false)
             }
             !transferEncodingSet -> {
                 when (content) {
@@ -87,6 +92,9 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
         }
     }
 
+    /**
+     * Process response outgoing [content]
+     */
     protected open suspend fun respondOutgoingContent(content: OutgoingContent) {
         when (content) {
             is OutgoingContent.ProtocolUpgrade -> {
@@ -128,16 +136,26 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
         }
     }
 
+    /**
+     * Process response with no content
+     */
     protected open suspend fun respondNoContent(content: OutgoingContent.NoContent) {
         // Do nothing by default
     }
 
+    /**
+     * Process response [content] using [OutgoingContent.WriteChannelContent.writeTo].
+     */
     protected open suspend fun respondWriteChannelContent(content: OutgoingContent.WriteChannelContent) {
         // Retrieve response channel, that might send out headers, so it should go after commitHeaders
         responseChannel().use {
             // Call user code to send data
 //            val before = totalBytesWritten
-            content.writeTo(this)
+            try {
+                content.writeTo(this)
+            } catch (closed: ClosedWriteChannelException) {
+                throw ChannelWriteException(exception = closed)
+            }
 
             // TODO currently we can't ensure length like that
             // because a joined channel doesn't increment totalBytesWritten
@@ -148,23 +166,29 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
         }
     }
 
+    /**
+     * Respond with [bytes] content
+     */
     protected open suspend fun respondFromBytes(bytes: ByteArray) {
         headers[HttpHeaders.ContentLength]?.toLong()?.let { length ->
             ensureLength(length, bytes.size.toLong())
         }
 
         responseChannel().use {
-            withContext(Unconfined) {
+            withContext(Dispatchers.Unconfined) {
                 writeFully(bytes)
             }
         }
     }
 
+    /**
+     * Respond from [readChannel]
+     */
     protected open suspend fun respondFromChannel(readChannel: ByteReadChannel) {
         responseChannel().use {
             val length = headers[HttpHeaders.ContentLength]?.toLong()
-            val copied = withContext(Unconfined) {
-                readChannel.copyTo(this, length ?: Long.MAX_VALUE)
+            val copied = withContext(Dispatchers.Unconfined) {
+                readChannel.copyTo(this@use, length ?: Long.MAX_VALUE)
             }
 
             length ?: return@use
@@ -178,24 +202,51 @@ abstract class BaseApplicationResponse(override val call: ApplicationCall) : App
         if (expected > actual) throw BodyLengthIsTooSmall(expected, actual)
     }
 
+    /**
+     * Process upgrade response
+     */
     protected abstract suspend fun respondUpgrade(upgrade: OutgoingContent.ProtocolUpgrade)
-    protected abstract suspend fun responseChannel(): ByteWriteChannel
-    protected open val bufferPool: ByteBufferPool get() = NoPool
 
+    /**
+     * Get response output channel
+     */
+    protected abstract suspend fun responseChannel(): ByteWriteChannel
+
+    /**
+     * ByteBuffer pool
+     */
+    protected open val bufferPool: ObjectPool<ByteBuffer> get() = KtorDefaultPool
+
+    /**
+     * Set underlying engine's response status
+     */
     protected abstract fun setStatus(statusCode: HttpStatusCode)
 
     override fun push(builder: ResponsePushBuilder) {
         link(builder.url.buildString(), LinkHeader.Rel.Prefetch)
     }
 
+    /**
+     * Thrown when there was already response sent but we are trying to respond again
+     */
     class ResponseAlreadySentException : IllegalStateException("Response has already been sent")
 
+    /**
+     * [OutgoingContent] is trying to set some header that is not allowed for this content type.
+     * For example, only upgrade content can set `Upgrade` header.
+     */
     class InvalidHeaderForContent(name: String, content: String) : IllegalStateException("Header $name is not allowed for $content")
 
+    /**
+     * Content's actual body size doesn't match the provided one in `Content-Length` header
+     */
     class BodyLengthIsTooSmall(expected: Long, actual: Long) : IllegalStateException(
             "Body.size is too small. Body: $actual, Content-Length: $expected"
     )
 
+    /**
+     * Content's actual body size doesn't match the provided one in `Content-Length` header
+     */
     class BodyLengthIsTooLong(expected: Long) : IllegalStateException(
             "Body.size is too long. Expected $expected"
     )

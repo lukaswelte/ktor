@@ -6,56 +6,105 @@ import io.ktor.network.selector.*
 import io.ktor.network.sockets.*
 import io.ktor.network.sockets.ServerSocket
 import io.ktor.network.sockets.Socket
-import io.ktor.network.util.*
 import io.ktor.util.*
-import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.*
 import org.slf4j.*
 import java.net.*
 import java.nio.channels.*
 import java.time.*
 import java.util.concurrent.*
 import java.util.concurrent.CancellationException
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 
+/**
+ * Represents a server instance
+ * @property rootServerJob server job - root for all jobs
+ * @property acceptJob client connections accepting job
+ * @property serverSocket a deferred server socket instance, could be completed with error if it failed to bind
+ */
+@Suppress("MemberVisibilityCanBePrivate")
+@KtorExperimentalAPI
 class HttpServer(val rootServerJob: Job, val acceptJob: Job, val serverSocket: Deferred<ServerSocket>)
 
+/**
+ * HTTP server connector settings
+ * @property host to listen to
+ * @property port to listen to
+ * @property connectionIdleTimeoutSeconds time to live for IDLE connections
+ */
+@KtorExperimentalAPI
 data class HttpServerSettings(
-        val host: String = "0.0.0.0",
-        val port: Int = 8080,
-        val connectionIdleTimeoutSeconds: Long = 45
+    val host: String = "0.0.0.0",
+    val port: Int = 8080,
+    val connectionIdleTimeoutSeconds: Long = 45
 )
 
-fun httpServer(settings: HttpServerSettings, parentJob: Job? = null, callDispatcher: CoroutineContext = ioCoroutineDispatcher, handler: HttpRequestHandler): HttpServer {
+@Suppress("KDocMissingDocumentation")
+@Deprecated("Use httpServer with CoroutineScope receiver")
+fun httpServer(settings: HttpServerSettings, parentJob: Job? = null, handler: HttpRequestHandler): HttpServer {
+    val parent = parentJob ?: Dispatchers.Default
+    return CoroutineScope(parent).httpServer(settings, handler = handler)
+}
+
+@Suppress("KDocMissingDocumentation")
+@Deprecated("Use httpServer with CoroutineScope receiver")
+fun httpServer(
+    settings: HttpServerSettings,
+    parentJob: Job? = null,
+    callDispatcher: CoroutineContext?,
+    handler: HttpRequestHandler
+): HttpServer {
+    if (callDispatcher != null) {
+        throw UnsupportedOperationException()
+    }
+
+    @Suppress("DEPRECATION")
+    return httpServer(settings, parentJob, handler)
+}
+
+/**
+ * Start an http server with [settings] invoking [handler] for every request
+ */
+@UseExperimental(InternalAPI::class)
+fun CoroutineScope.httpServer(
+    settings: HttpServerSettings,
+    handler: HttpRequestHandler
+): HttpServer {
     val socket = CompletableDeferred<ServerSocket>()
 
     val serverLatch = CompletableDeferred<Unit>()
-    val serverJob = launch(ioCoroutineDispatcher + CoroutineName("server-root-${settings.port}") + (parentJob ?: EmptyCoroutineContext)) {
+    val serverJob = launch(
+        context = CoroutineName("server-root-${settings.port}"),
+        start = CoroutineStart.UNDISPATCHED
+    ) {
         serverLatch.await()
     }
 
-    val selector = ActorSelectorManager(ioCoroutineDispatcher)
+    val selector = ActorSelectorManager(coroutineContext)
     val timeout = WeakTimeoutQueue(TimeUnit.SECONDS.toMillis(settings.connectionIdleTimeoutSeconds),
-            Clock.systemUTC(),
-            { TimeoutCancellationException("Connection IDLE") })
+        Clock.systemUTC()
+       ) { io.ktor.http.cio.internals.TimeoutCancellationException("Connection IDLE") }
 
-    val acceptJob = launch(ioCoroutineDispatcher + serverJob + CoroutineName("accept-${settings.port}")) {
+    val acceptJob = launch(serverJob + CoroutineName("accept-${settings.port}")) {
         aSocket(selector).tcp().bind(InetSocketAddress(settings.host, settings.port)).use { server ->
             socket.complete(server)
 
-            try {
-                val parentAndHandler = serverJob + KtorUncaughtExceptionHandler()
+            val connectionScope = CoroutineScope(
+                coroutineContext +
+                    SupervisorJob(serverJob) +
+                    KtorUncaughtExceptionHandler() +
+                    CoroutineName("request")
+            )
 
+            try {
                 while (true) {
                     val client: Socket = server.accept()
 
-                    val clientJob = startConnectionPipeline(
-                            input = client.openReadChannel(),
-                            output = client.openWriteChannel(),
-                            parentJob = parentAndHandler,
-                            ioContext = ioCoroutineDispatcher,
-                            callContext = callDispatcher,
-                            timeout = timeout,
-                            handler = handler
+                    val clientJob = connectionScope.startConnectionPipeline(
+                        input = client.openReadChannel(),
+                        output = client.openWriteChannel(),
+                        timeout = timeout,
+                        handler = handler
                     )
 
                     clientJob.invokeOnCompletion {
@@ -63,10 +112,11 @@ fun httpServer(settings: HttpServerSettings, parentJob: Job? = null, callDispatc
                     }
                 }
             } catch (closed: ClosedChannelException) {
-                coroutineContext.cancel(closed)
+                coroutineContext.cancel()
             } finally {
                 server.close()
                 server.awaitClosed()
+                connectionScope.coroutineContext.cancel()
             }
         }
     }
@@ -77,6 +127,7 @@ fun httpServer(settings: HttpServerSettings, parentJob: Job? = null, callDispatc
         timeout.process()
     }
 
+    @UseExperimental(InternalCoroutinesApi::class) // TODO it's attach child?
     serverJob.invokeOnCompletion(onCancelling = true) {
         timeout.cancel()
     }
@@ -97,7 +148,5 @@ private class KtorUncaughtExceptionHandler : CoroutineExceptionHandler {
         if (exception is CancellationException) return
 
         logger.error(exception)
-        // unlike the default coroutine exception handler we shouldn't cancel parent job here
-        // otherwise single call failure will cancel the whole server
     }
 }

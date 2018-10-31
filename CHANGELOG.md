@@ -1,3 +1,114 @@
+# 0.9.5
+> Published 19 Sept 2018
+
+* Added shorthand client functions for HEAD, OPTIONS, PATCH and DELETE methods (#562)
+* URLBuilder's parser improved (#553, #567)
+* Improved client's cookie matching and processing
+* Introduced CallId feature
+* Added MDC support to CallLogging feature
+* Fixed setting charset encoding for non-text content types
+* Added `respondOutputStream { }` response function
+* Migrated to Kotlin 1.2.70
+* Split Infrastructure phase into Monitoring and Features phases
+
+# 0.9.4
+> Published 29 Aug 2018
+
+* Added multiplatform client support (android and ios)
+* Added `Android` client engine (`UrlConnection`)
+* Added `OkHttp` client engine (Android support)
+* Added `Jackson` feature support
+* Added `Ios` client engine
+* Deprecated `response.contentType` and `response.contentLength`
+* Strengthened `IncomingContent` deprecation
+* Upgraded Jetty ALPN, Tomcat
+* Fixed config evaluation issues (#488)
+* Disabled async incoming upgrade stream at Tomcat
+* Prohibited appending unsafe headers to request headers
+* Renamed `XForwardedHeadersSupport` to `XForwardedHeaderSupport` (#547)
+* Added `HttpResponse.receive<T>` method to run response pipeline on raw response
+* Introduced kotlin multiplatform url-parser
+* Supported client form data and multipart 
+* Added missing client builders for `post` and `put` methods
+* Simplify client configuration API
+* Fixed several compression issues
+* Fixed client attributes evaluation
+* Fixed CIO engine random algorithm selection
+* Fixed url parsing (#511)
+* Fixed ambiguity in writing client `Content-Type` and `Content-Length` headers
+* Minor performance fixes
+* Netty HTTP/2 fixes
+* Fixed IOOBE in satic resource resolution (#493)
+* Fixed JWT error handling
+* Kotlin 1.2.61, kotlinx.coroutines 0.25.0
+
+# 0.9.3
+> Published 26 Jun 2018
+
+* Improved WebSocket API
+* Websocket header `Sec-WebSocket-Key` is now optional
+* Fixed client cookies rendering to avoid `x-enc`
+* Fixed plain text client reader (#392)
+* Added EC support in CIO TLS (#394: ECDHE_RSA_AES256_SHA384, ECDHE_RSA_AES128_SHA256)
+* Fix client certificate validation
+* Introduced optional authentication 
+* Added `ApplicationCall` as receiver for auth `validate` functions
+* Introduced `call.respondBytes` (#395)
+* Improved JWT support: multiple schemes, nullable issuer
+* Conversion service enum type diagnostics improved (#403)
+* Avoided using apos entity in HTML escaping as IE doesn't support it (#400)
+* Converter support for java big numbers
+* Ability to add auth methods to existing feature on the fly
+* Improved auth header scheme and contents validation (#415)
+* Default charset for BasicAuth is now UTF-8 (#420) 
+* Added `ByteArrayContent.contentLength` (#421)
+* Fixed `headersOf` case insensitive issue (#426)
+* Client deserialization improved by using type token
+* Ability to disable client default transformers
+* Explicit `Accept` header in client request
+* Turn on masking in client websockets (#423)
+* Fixed inverted `PartialContent.Configuration.maxRangeCount` check (#440)
+* Fixed uncaught `UnsupportedMediaTypeException` from `receiveOrNull()` (#442)
+* Fix multipart boundary header parsing
+* Upgraded jwks/jwt, applied RSA256 by default if unspecified (#434, #435)
+* Upgrade coroutine version to 0.23.3
+* Upgrade Jetty version to 9.4.11.v20180605
+* Add `client-mock-engine` for testing purpose
+* Use default available engine by deafult
+* Upgrade kotlin to 1.2.50
+
+Move ktor-samples to a separate repository (#340). https://github.com/ktorio/ktor-samples
+
+# 0.9.2
+> Published 23 Apr 2018
+
+* New auth DSL, more suspendable functions (such as `verify`/`validate`)
+* `RoutingResolveTrace` for introspecting routing resolution process
+* HTTP client improvements and bugfixes (DSL, reconnect, redirect, cookies, websockets and more)
+* CIO http client pipelining support, chunked and more
+* CIO initial TLS support
+* Session authentication provider
+* OAuth2: introduce ability to generate and verify state field
+* OAuth: fix scopes parameter to conform to RFC (#329)
+* OAuth2: fix bug with double scopes encoding (#370)
+* OAuth2: add ability to intercept redirect URL
+* CORS: introduce `allowSameOrigin` option
+* Auth: provide application call as receiver for validate functions (#375 and related)
+* Test host reworked, `handleRequest` reads the body and redirects the exceptions correctly
+* Servlets: fixed `inputStream` acquisition, fixed error handling
+* Java 9 compatibility improved (no modules yet)
+* Digest auth fixes (#380)
+* Log running connectors details for better development experience (#318)
+* `Last-Modified` header and related functionality to work in proper GMT time zone (#344)
+* `IncomingContent` is deprecated
+* `URLBuilder` fixes and improvements
+* Documentation improvements
+* Performance optimizations (Netty, CIO server backends)
+* CIO server improved stability
+* Encrypted session support (`SessionTransportTransformerEncrypt`)
+* Empty (`null`) model for freemarker (#291)
+* `ContentNegotiation` missing `Accept` header support (#317)
+
 # 0.9.1
 > Published 29 Jan 2018
 

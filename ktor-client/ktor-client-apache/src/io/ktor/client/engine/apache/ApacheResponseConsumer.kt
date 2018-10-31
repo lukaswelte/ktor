@@ -1,24 +1,23 @@
 package io.ktor.client.engine.apache
 
 import io.ktor.client.utils.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.io.*
 import org.apache.http.*
 import org.apache.http.entity.*
 import org.apache.http.nio.*
 import org.apache.http.nio.protocol.*
 import org.apache.http.protocol.*
 import java.nio.ByteBuffer
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 
 
 private const val MAX_QUEUE_LENGTH: Int = 65 * 1024 / DEFAULT_HTTP_BUFFER_SIZE
 
 internal class ApacheResponseConsumer(
-        private val dispatcher: CoroutineContext,
-        private val parent: CompletableDeferred<Unit>,
-        private val block: (HttpResponse, ByteReadChannel) -> Unit
+    private val callContext: CoroutineContext,
+    private val block: (HttpResponse, ByteReadChannel) -> Unit
 ) : AbstractAsyncResponseConsumer<Unit>() {
     private val channel = ByteChannel()
     private val backendChannel = Channel<ByteBuffer>(MAX_QUEUE_LENGTH)
@@ -48,7 +47,7 @@ internal class ApacheResponseConsumer(
 
         current.flip()
         if (!backendChannel.offer(current)) {
-            launch(Unconfined) {
+            GlobalScope.launch(Dispatchers.Unconfined) {
                 ioctrl.suspendInput()
                 try {
                     backendChannel.send(current)
@@ -64,9 +63,11 @@ internal class ApacheResponseConsumer(
 
     override fun onEntityEnclosed(entity: HttpEntity, contentType: ContentType) {}
 
-    private fun runResponseProcessing() = launch(dispatcher) {
+    @UseExperimental(ExperimentalCoroutinesApi::class, ObsoleteCoroutinesApi::class)
+    private fun runResponseProcessing() = GlobalScope.launch(callContext) {
         try {
             while (!backendChannel.isClosedForReceive) {
+                @Suppress("DEPRECATION")
                 val buffer = backendChannel.receiveOrNull() ?: break
                 channel.writeFully(buffer)
                 HttpClientDefaultPool.recycle(buffer)
@@ -75,10 +76,9 @@ internal class ApacheResponseConsumer(
             channel.writeRemaining()
         } catch (cause: Throwable) {
             channel.close(cause)
-            parent.completeExceptionally(cause)
+            callContext.cancel()
         } finally {
             channel.close()
-            parent.complete(Unit)
             HttpClientDefaultPool.recycle(current)
         }
     }

@@ -1,27 +1,30 @@
 package io.ktor.server.netty
 
-import io.ktor.content.*
 import io.ktor.http.*
 import io.ktor.http.HttpHeaders
+import io.ktor.http.content.*
 import io.ktor.response.*
 import io.ktor.server.engine.*
+import io.ktor.util.*
 import io.netty.channel.*
 import io.netty.handler.codec.http.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
-import kotlin.coroutines.experimental.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
+import kotlin.coroutines.*
 
-internal abstract class NettyApplicationResponse(call: NettyApplicationCall,
+@Suppress("KDocMissingDocumentation")
+@InternalAPI
+abstract class NettyApplicationResponse(call: NettyApplicationCall,
                                                  protected val context: ChannelHandlerContext,
                                                  protected val engineContext: CoroutineContext,
                                                  protected val userContext: CoroutineContext) : BaseApplicationResponse(call) {
 
-    internal val responseMessage = CompletableDeferred<Any>()
+    val responseMessage = CompletableDeferred<Any>()
 
     @Volatile
     protected var responseMessageSent = false
 
-    internal var responseChannel: ByteReadChannel = EmptyByteReadChannel
+    internal var responseChannel: ByteReadChannel = ByteReadChannel.Empty
 
     init {
         pipeline.intercept(ApplicationSendPipeline.Engine) {
@@ -46,7 +49,16 @@ internal abstract class NettyApplicationResponse(call: NettyApplicationCall,
         // Note that it shouldn't set HttpHeaders.ContentLength even if we know it here,
         // because it should've been set by commitHeaders earlier
         val chunked = headers[HttpHeaders.TransferEncoding] == "chunked"
-        sendResponse(chunked, content = ByteReadChannel(bytes))
+
+        if (!responseMessageSent) {
+            val message = responseMessage(chunked, bytes)
+            responseChannel = when (message) {
+                is LastHttpContent -> ByteReadChannel.Empty
+                else -> ByteReadChannel(bytes)
+            }
+            responseMessage.complete(message)
+            responseMessageSent = true
+        }
     }
 
     override suspend fun responseChannel(): ByteWriteChannel {
@@ -57,12 +69,13 @@ internal abstract class NettyApplicationResponse(call: NettyApplicationCall,
     }
 
     override suspend fun respondNoContent(content: OutgoingContent.NoContent) {
-        sendResponse(false, EmptyByteReadChannel)
+        respondFromBytes(EmptyByteArray)
     }
 
     protected abstract fun responseMessage(chunked: Boolean, last: Boolean): Any
+    protected open fun responseMessage(chunked: Boolean, data: ByteArray): Any = responseMessage(chunked, true)
 
-    protected fun sendResponse(chunked: Boolean = true, content: ByteReadChannel) {
+    internal fun sendResponse(chunked: Boolean = true, content: ByteReadChannel) {
         if (!responseMessageSent) {
             responseChannel = content
             responseMessage.complete(responseMessage(chunked, content.isClosedForRead))
@@ -71,14 +84,14 @@ internal abstract class NettyApplicationResponse(call: NettyApplicationCall,
     }
 
     internal fun ensureResponseSent() {
-        sendResponse(content = EmptyByteReadChannel)
+        sendResponse(content = ByteReadChannel.Empty)
     }
 
     internal fun close() {
         val existingChannel = responseChannel
         if (existingChannel is ByteWriteChannel) {
             existingChannel.close(ClosedWriteChannelException("Application response has been closed"))
-            responseChannel = EmptyByteReadChannel
+            responseChannel = ByteReadChannel.Empty
         }
 
         ensureResponseSent()
@@ -88,13 +101,16 @@ internal abstract class NettyApplicationResponse(call: NettyApplicationCall,
 
     fun cancel() {
         if (!responseMessageSent) {
-            responseChannel = EmptyByteReadChannel
+            responseChannel = ByteReadChannel.Empty
             responseMessage.cancel()
             responseMessageSent = true
         }
     }
 
     companion object {
-        val responseStatusCache = HttpStatusCode.allStatusCodes.associateBy({ it.value }, { HttpResponseStatus.valueOf(it.value) })
+        private val EmptyByteArray = ByteArray(0)
+
+        val responseStatusCache: Map<Int, HttpResponseStatus> =
+            HttpStatusCode.allStatusCodes.associateBy({ it.value }, { HttpResponseStatus.valueOf(it.value) })
     }
 }

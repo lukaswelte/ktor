@@ -1,21 +1,40 @@
 package io.ktor.http
 
-import java.nio.charset.*
+import kotlinx.io.charsets.*
 
-class ContentType(val contentType: String, val contentSubtype: String, parameters: List<HeaderValueParam> = emptyList()) : HeaderValueWithParameters("$contentType/$contentSubtype", parameters) {
+/**
+ * Represents a value for a `Content-Type` header.
+ * @property contentType represents a type part of the media type.
+ * @property contentSubtype represents a subtype part of the media type.
+ */
+class ContentType private constructor(val contentType: String, val contentSubtype: String, existingContent: String, parameters: List<HeaderValueParam> = emptyList())
+    : HeaderValueWithParameters(existingContent, parameters) {
+
+    constructor(contentType: String, contentSubtype: String, parameters: List<HeaderValueParam> = emptyList()) : this(contentType, contentSubtype, "$contentType/$contentSubtype", parameters)
+
+    /**
+     * Creates a copy of `this` type with the added parameter with the [name] and [value].
+     */
     fun withParameter(name: String, value: String): ContentType {
-        val existing = parameters.indexOfFirst {
-            it.name.equals(name, ignoreCase = true) && it.value.equals(value, ignoreCase = true)
-        }
-        val newParameters = if (existing == -1)
-            parameters + HeaderValueParam(name, value)
-        else
-            parameters
-        return ContentType(contentType, contentSubtype, newParameters)
+        if (hasParameter(name, value)) return this
+
+        return ContentType(contentType, contentSubtype, content, parameters + HeaderValueParam(name, value))
     }
 
-    fun withoutParameters() = ContentType(contentType, contentSubtype)
+    private fun hasParameter(name: String, value: String): Boolean = when (parameters.size) {
+        0 -> false
+        1 -> parameters[0].let { it.name.equals(name, ignoreCase = true) && it.value.equals(value, ignoreCase = true) }
+        else -> parameters.any { it.name.equals(name, ignoreCase = true) && it.value.equals(value, ignoreCase = true) }
+    }
 
+    /**
+     * Creates a copy of `this` type without any parameters
+     */
+    fun withoutParameters(): ContentType = ContentType(contentType, contentSubtype)
+
+    /**
+     * Checks if `this` type matches a [pattern] type taking into account placeholder symbols `*` and parameters. 
+     */
     fun match(pattern: ContentType): Boolean {
         if (pattern.contentType != "*" && !pattern.contentType.equals(contentType, ignoreCase = true))
             return false
@@ -43,6 +62,9 @@ class ContentType(val contentType: String, val contentSubtype: String, parameter
         return true
     }
 
+    /**
+     * Checks if `this` type matches a [pattern] type taking into account placeholder symbols `*` and parameters.
+     */
     fun match(pattern: String): Boolean = match(ContentType.parse(pattern))
 
     override fun equals(other: Any?): Boolean =
@@ -59,6 +81,9 @@ class ContentType(val contentType: String, val contentSubtype: String, parameter
     }
 
     companion object {
+        /**
+         * Parses a string representing a `Content-Type` header into a [ContentType] instance.
+         */
         fun parse(value: String): ContentType = HeaderValueWithParameters.parse(value) { parts, parameters ->
             val slash = parts.indexOf('/')
             if (slash == -1) {
@@ -75,11 +100,20 @@ class ContentType(val contentType: String, val contentSubtype: String, parameter
             ContentType(type, subtype, parameters)
         }
 
-        val Any = ContentType("*", "*")
+        /**
+         * Represents a pattern `* / *` to match any content type.
+         */
+        val Any: ContentType = ContentType("*", "*")
     }
 
-    @Suppress("unused")
+    /**
+     * Provides a list of standard subtypes of an `application` content type.
+     */
+    @Suppress("KDocMissingDocumentation", "unused", "PublicApiImplicitType")
     object Application {
+        /**
+         * Represents a pattern `application / *` to match any application content type.
+         */
         val Any = ContentType("application", "*")
         val Atom = ContentType("application", "atom+xml")
         val Json = ContentType("application", "json")
@@ -94,7 +128,10 @@ class ContentType(val contentType: String, val contentSubtype: String, parameter
         val FormUrlEncoded = ContentType("application", "x-www-form-urlencoded")
     }
 
-    @Suppress("unused")
+    /**
+     * Provides a list of standard subtypes of an `audio` content type.
+     */
+    @Suppress("KDocMissingDocumentation", "unused", "PublicApiImplicitType")
     object Audio {
         val Any = ContentType("audio", "*")
         val MP4 = ContentType("audio", "mp4")
@@ -102,7 +139,10 @@ class ContentType(val contentType: String, val contentSubtype: String, parameter
         val OGG = ContentType("audio", "ogg")
     }
 
-    @Suppress("unused")
+    /**
+     * Provides a list of standard subtypes of an `image` content type.
+     */
+    @Suppress("KDocMissingDocumentation", "unused", "PublicApiImplicitType")
     object Image {
         val Any = ContentType("image", "*")
         val GIF = ContentType("image", "gif")
@@ -112,13 +152,19 @@ class ContentType(val contentType: String, val contentSubtype: String, parameter
         val XIcon = ContentType("image", "x-icon")
     }
 
-    @Suppress("unused")
+    /**
+     * Provides a list of standard subtypes of a `message` content type.
+     */
+    @Suppress("KDocMissingDocumentation", "unused", "PublicApiImplicitType")
     object Message {
         val Any = ContentType("message", "*")
         val Http = ContentType("message", "http")
     }
 
-    @Suppress("unused")
+    /**
+     * Provides a list of standard subtypes of a `multipart` content type.
+     */
+    @Suppress("KDocMissingDocumentation", "unused", "PublicApiImplicitType")
     object MultiPart {
         val Any = ContentType("multipart", "*")
         val Mixed = ContentType("multipart", "mixed")
@@ -130,18 +176,25 @@ class ContentType(val contentType: String, val contentSubtype: String, parameter
         val ByteRanges = ContentType("multipart", "byteranges")
     }
 
-    @Suppress("unused")
+    /**
+     * Provides a list of standard subtypes of a `text` content type.
+     */
+    @Suppress("KDocMissingDocumentation", "unused", "PublicApiImplicitType")
     object Text {
         val Any = ContentType("text", "*")
         val Plain = ContentType("text", "plain")
         val CSS = ContentType("text", "css")
+        val CSV = ContentType("text", "csv")
         val Html = ContentType("text", "html")
         val JavaScript = ContentType("text", "javascript")
         val VCard = ContentType("text", "vcard")
         val Xml = ContentType("text", "xml")
     }
 
-    @Suppress("unused")
+    /**
+     * Provides a list of standard subtypes of a `video` content type.
+     */
+    @Suppress("KDocMissingDocumentation", "unused", "PublicApiImplicitType")
     object Video {
         val Any = ContentType("video", "*")
         val MPEG = ContentType("video", "mpeg")
@@ -151,7 +204,17 @@ class ContentType(val contentType: String, val contentSubtype: String, parameter
     }
 }
 
+/**
+ * Exception thrown when a content type string is malformed.
+ */
 class BadContentTypeFormatException(value: String) : Exception("Bad Content-Type format: $value")
 
-fun ContentType.withCharset(charset: Charset) = withParameter("charset", charset.name())
-fun HeaderValueWithParameters.charset() = parameter("charset")?.let { Charset.forName(it) }
+/**
+ * Creates a copy of `this` type with the added charset parameter with [charset] value.
+ */
+fun ContentType.withCharset(charset: Charset): ContentType = withParameter("charset", charset.name)
+
+/**
+ * Extracts a [Charset] value from the given `Content-Type`, `Content-Disposition` or similar header value.  
+ */
+fun HeaderValueWithParameters.charset(): Charset? = parameter("charset")?.let { Charset.forName(it) }

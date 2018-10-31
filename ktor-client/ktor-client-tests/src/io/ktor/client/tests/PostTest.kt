@@ -1,61 +1,63 @@
 package io.ktor.client.tests
 
 import io.ktor.application.*
-import io.ktor.client.*
 import io.ktor.client.engine.*
 import io.ktor.client.request.*
 import io.ktor.client.tests.utils.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.engine.*
 import io.ktor.server.jetty.*
-import kotlinx.coroutines.experimental.*
-import org.junit.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 import org.junit.Assert.*
-import java.util.*
+import kotlin.test.*
 
 abstract class PostTest(private val factory: HttpClientEngineFactory<*>) : TestWithKtor() {
-    private val BODY_PREFIX = "Hello, post"
-
     override val server = embeddedServer(Jetty, serverPort) {
         routing {
             post("/") {
                 val content = call.receive<String>()
-                assert(content.startsWith(BODY_PREFIX))
-                call.respondText(content)
+                call.respond(content)
             }
         }
     }
 
     @Test
     fun postString() {
-        postHelper(BODY_PREFIX)
+        postHelper(makeString(777))
     }
 
     @Test
     fun hugePost() {
-        val builder = StringBuilder()
-        val stringSize = 1024 * 1024 * 32
-        val random = Random()
-
-        while (builder.length < stringSize) {
-            builder.append(random.nextInt(256).toChar())
-        }
-
-        postHelper("$BODY_PREFIX: $builder")
+        postHelper(makeString(32 * 1024 * 1024))
     }
 
-    private fun postHelper(text: String) {
-        val client = HttpClient(factory)
-
-        val response = runBlocking {
-            client.post<String>(port = serverPort, body = text)
+    private fun postHelper(text: String) = clientTest(factory) {
+        test { client ->
+            val response = client.post<String>(port = serverPort, body = text)
+            assertEquals(text, response)
         }
+    }
 
-        assertEquals(text, response)
-        client.close()
+    @Test
+    fun testWithPause() = clientTest(factory) {
+        test { client ->
+            val content = makeString(32 * 1024 * 1024)
+
+            val response = client.post<String>(port = serverPort, body = object: OutgoingContent.WriteChannelContent() {
+                override suspend fun writeTo(channel: ByteWriteChannel) {
+                    channel.writeStringUtf8(content)
+                    delay(1000)
+                    channel.writeStringUtf8(content)
+                    channel.close()
+                }
+            })
+
+            assertEquals(content + content, response)
+        }
     }
 
 }

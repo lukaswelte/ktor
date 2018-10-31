@@ -1,11 +1,10 @@
 package io.ktor.sessions
 
-import io.ktor.util.hex
-import java.security.SecureRandom
-import javax.crypto.Cipher
-import javax.crypto.Mac
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
+import io.ktor.util.*
+import org.slf4j.*
+import java.security.*
+import javax.crypto.*
+import javax.crypto.spec.*
 
 /**
  * Session transformer that encrypts/decrypts the input.
@@ -20,6 +19,12 @@ import javax.crypto.spec.SecretKeySpec
  *
  * You have to provide keys of compatible sizes: 16, 24 and 32 for AES encryption.
  * For HmacSHA256 it is recommended a key of 32 bytes.
+ *
+ * @property encryptionKeySpec is a secret key that is used for encryption
+ * @property signKeySpec is a secret key that is used for signing
+ * @property ivGenerator is a function that generates input vectors
+ * @property encryptAlgorithm is an encryption algorithm name
+ * @property signAlgorithm is a signing algorithm name
  */
 class SessionTransportTransformerEncrypt(
     val encryptionKeySpec: SecretKeySpec,
@@ -28,8 +33,16 @@ class SessionTransportTransformerEncrypt(
     val encryptAlgorithm: String = encryptionKeySpec.algorithm,
     val signAlgorithm: String = signKeySpec.algorithm
 ) : SessionTransportTransformer {
+    companion object {
+        private val log = LoggerFactory.getLogger(SessionTransportTransformerEncrypt::class.qualifiedName)
+    }
+
     private val charset = Charsets.UTF_8
-    val encryptionKeySize get() = encryptionKeySpec.encoded.size
+
+    /**
+     * Encryption key size in bytes
+     */
+    val encryptionKeySize: Int get() = encryptionKeySpec.encoded.size
 
     // Check that input keys are right
     init {
@@ -50,17 +63,26 @@ class SessionTransportTransformerEncrypt(
     )
 
     override fun transformRead(transportValue: String): String? {
-        val encrypedMac = transportValue.substringAfterLast('/', "")
-        val iv = hex(transportValue.substringBeforeLast('/'))
-        val encrypted = hex(encrypedMac.substringBeforeLast(':'))
-        val macHex = encrypedMac.substringAfterLast(':', "")
-        val decrypted = decrypt(iv, encrypted)
+        try {
+            val encrypedMac = transportValue.substringAfterLast('/', "")
+            val iv = hex(transportValue.substringBeforeLast('/'))
+            val encrypted = hex(encrypedMac.substringBeforeLast(':'))
+            val macHex = encrypedMac.substringAfterLast(':', "")
+            val decrypted = decrypt(iv, encrypted)
 
-        if (hex(mac(decrypted)) != macHex) {
+            if (hex(mac(decrypted)) != macHex) {
+                return null
+            }
+
+            return decrypted.toString(charset)
+        } catch (e: Throwable) {
+            // NumberFormatException // Invalid hex
+            // InvalidAlgorithmParameterException // Invalid data
+            if (log.isDebugEnabled) {
+                log.debug(e.toString())
+            }
             return null
         }
-
-        return decrypted.toString(charset)
     }
 
     override fun transformWrite(transportValue: String): String {

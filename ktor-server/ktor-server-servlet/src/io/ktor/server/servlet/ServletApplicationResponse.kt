@@ -4,9 +4,12 @@ import io.ktor.application.*
 import io.ktor.http.*
 import io.ktor.response.*
 import io.ktor.server.engine.*
-import kotlinx.coroutines.experimental.io.*
+import io.ktor.util.cio.*
+import kotlinx.coroutines.io.*
 import javax.servlet.http.*
 
+@Suppress("KDocMissingDocumentation")
+@EngineAPI
 abstract class ServletApplicationResponse(
     call: ApplicationCall,
     protected val servletResponse: HttpServletResponse
@@ -49,7 +52,12 @@ abstract class ServletApplicationResponse(
                         join()
                     }
                 } else {
-                    servletResponse.flushBuffer()
+                    try {
+                        @Suppress("BlockingMethodInNonBlockingContext")
+                        servletResponse.flushBuffer()
+                    } catch (cause: Throwable) {
+                        throw ChannelWriteException(exception = cause)
+                    }
                 }
             }
         }

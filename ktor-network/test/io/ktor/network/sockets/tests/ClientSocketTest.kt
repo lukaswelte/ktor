@@ -3,12 +3,13 @@ package io.ktor.network.sockets.tests
 import io.ktor.network.selector.*
 import io.ktor.network.sockets.*
 import io.ktor.network.sockets.Socket
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 import org.junit.*
 import org.junit.Test
 import org.junit.rules.*
 import java.net.ServerSocket
+import java.nio.*
 import java.util.concurrent.*
 import kotlin.concurrent.*
 import kotlin.test.*

@@ -1,15 +1,20 @@
 package io.ktor.server.engine
 
 import io.ktor.application.*
-import io.ktor.cio.*
+import io.ktor.util.cio.*
 import io.ktor.features.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.response.*
 import io.ktor.util.*
+import kotlinx.coroutines.io.*
 import java.nio.channels.*
-import java.util.concurrent.*
+import java.util.concurrent.CancellationException
 
+/**
+ * Default engine pipeline for all engines. Use it only if you are writing your own application engine implementation.
+ */
+@EngineAPI
 fun defaultEnginePipeline(environment: ApplicationEnvironment): EnginePipeline {
     val pipeline = EnginePipeline()
 
@@ -33,30 +38,39 @@ fun defaultEnginePipeline(environment: ApplicationEnvironment): EnginePipeline {
                 call.respond(HttpStatusCode.InternalServerError)
             } catch (ignore: BaseApplicationResponse.ResponseAlreadySentException) {
             }
+        } finally {
+            try {
+                call.request.receiveChannel().discard()
+            } catch (ignore: Throwable) {
+            } finally {
+            }
         }
     }
 
     return pipeline
 }
 
-private fun ApplicationEnvironment.logFailure(call: ApplicationCall, e: Throwable) {
+private fun ApplicationEnvironment.logFailure(call: ApplicationCall, cause: Throwable) {
     try {
         val status = call.response.status() ?: "Unhandled"
-        when (e) {
-            is CancellationException -> log.error("$status: ${call.request.toLogString()}, cancelled")
-            is ClosedChannelException -> log.error("$status: ${call.request.toLogString()}, channel closed")
-            is ChannelIOException -> log.error("$status: ${call.request.toLogString()}, channel failed")
-            else -> log.error("$status: ${call.request.toLogString()}", e)
+        val logString = try {
+            call.request.toLogString()
+        } catch (cause: Throwable) {
+            "(request error: $cause)"
+        }
+
+        when (cause) {
+            is CancellationException -> log.info("$status: $logString, cancelled")
+            is ClosedChannelException -> log.info("$status: $logString, channel closed")
+            is ChannelIOException -> log.info("$status: $logString, channel failed")
+            else -> log.error("$status: $logString", cause)
         }
     } catch (oom: OutOfMemoryError) {
         try {
-            log.error(e)
+            log.error(cause)
         } catch (oomAttempt2: OutOfMemoryError) {
             System.err.print("OutOfMemoryError: ")
-            System.err.println(e.message)
+            System.err.println(cause.message)
         }
     }
 }
-
-
-

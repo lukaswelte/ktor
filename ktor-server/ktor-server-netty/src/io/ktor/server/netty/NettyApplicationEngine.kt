@@ -7,13 +7,15 @@ import io.netty.bootstrap.*
 import io.netty.channel.*
 import io.netty.channel.nio.*
 import io.netty.channel.socket.nio.*
-import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.*
+import io.netty.handler.codec.http.*
 import java.util.concurrent.*
 
 /**
  * [ApplicationEngine] implementation for running in a standalone Netty
  */
-class NettyApplicationEngine(environment: ApplicationEngineEnvironment, configure: Configuration.() -> Unit = {}) : BaseApplicationEngine(environment) {
+class NettyApplicationEngine(environment: ApplicationEngineEnvironment, configure: Configuration.() -> Unit = {}) :
+    BaseApplicationEngine(environment) {
 
     /**
      * Configuration for the [NettyApplicationEngine]
@@ -23,6 +25,11 @@ class NettyApplicationEngine(environment: ApplicationEngineEnvironment, configur
          * Size of the queue to store [ApplicationCall] instances that cannot be immediately processed
          */
         var requestQueueLimit: Int = 16
+
+        /**
+         * Number of concurrently running requests from the same http pipeline
+         */
+        var runningLimit: Int = 10
 
         /**
          * Do not create separate call event group and reuse worker group for processing calls
@@ -38,6 +45,11 @@ class NettyApplicationEngine(environment: ApplicationEngineEnvironment, configur
          * Timeout in seconds for sending responses to client
          */
         var responseWriteTimeoutSeconds: Int = 10
+
+        /**
+         * User-provided function to configure Netty's [HttpServerCodec]
+         */
+        var httpServerCodec: () -> HttpServerCodec = ::HttpServerCodec
     }
 
     private val configuration = Configuration().apply(configure)
@@ -59,7 +71,7 @@ class NettyApplicationEngine(environment: ApplicationEngineEnvironment, configur
 
     private val dispatcherWithShutdown = DispatcherWithShutdown(NettyDispatcher)
     private val engineDispatcherWithShutdown = DispatcherWithShutdown(workerEventGroup.asCoroutineDispatcher())
-
+    private var cancellationDeferred: CompletableDeferred<Unit>? = null
 
     private var channels: List<Channel>? = null
     private val bootstraps = environment.connectors.map { connector ->
@@ -67,18 +79,27 @@ class NettyApplicationEngine(environment: ApplicationEngineEnvironment, configur
             configuration.configureBootstrap(this)
             group(connectionEventGroup, workerEventGroup)
             channel(NioServerSocketChannel::class.java)
-            childHandler(NettyChannelInitializer(pipeline, environment,
+            childHandler(
+                NettyChannelInitializer(
+                    pipeline, environment,
                     callEventGroup, engineDispatcherWithShutdown, dispatcherWithShutdown,
-                    connector, configuration.requestQueueLimit,
-                    configuration.responseWriteTimeoutSeconds))
+                    connector,
+                    configuration.requestQueueLimit,
+                    configuration.runningLimit,
+                    configuration.responseWriteTimeoutSeconds,
+                    configuration.httpServerCodec
+                )
+            )
         }
     }
 
     override fun start(wait: Boolean): NettyApplicationEngine {
         environment.start()
         channels = bootstraps.zip(environment.connectors)
-                .map { it.first.bind(it.second.host, it.second.port) }
-                .map { it.sync().channel() }
+            .map { it.first.bind(it.second.host, it.second.port) }
+            .map { it.sync().channel() }
+
+        cancellationDeferred = stopServerOnCancellation()
 
         if (wait) {
             channels?.map { it.closeFuture() }?.forEach { it.sync() }
@@ -88,8 +109,9 @@ class NettyApplicationEngine(environment: ApplicationEngineEnvironment, configur
     }
 
     override fun stop(gracePeriod: Long, timeout: Long, timeUnit: TimeUnit) {
+        cancellationDeferred?.complete(Unit)
         environment.monitor.raise(ApplicationStopPreparing, environment)
-        val channelFutures = channels?.map { it.close() }.orEmpty()
+        val channelFutures = channels?.mapNotNull { if (it.isOpen) it.close() else null }.orEmpty()
 
         dispatcherWithShutdown.prepareShutdown()
         engineDispatcherWithShutdown.prepareShutdown()

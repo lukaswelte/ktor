@@ -1,9 +1,9 @@
 package io.ktor.features
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.response.*
 import io.ktor.util.*
 import java.time.*
@@ -12,13 +12,13 @@ import java.util.*
 /**
  * Feature to check modified/match conditional headers and avoid sending contents if it was not changed
  */
-class ConditionalHeaders(private val versionProviders: List<(OutgoingContent) -> List<Version>>) {
+class ConditionalHeaders(private val versionProviders: List<suspend (OutgoingContent) -> List<Version>>) {
 
     /**
      * Configuration for [ConditionalHeaders] feature
      */
     class Configuration {
-        internal val versionProviders = mutableListOf<(OutgoingContent) -> List<Version>>()
+        internal val versionProviders = mutableListOf<suspend (OutgoingContent) -> List<Version>>()
 
         init {
             versionProviders.add { content -> content.defaultVersions }
@@ -27,7 +27,7 @@ class ConditionalHeaders(private val versionProviders: List<(OutgoingContent) ->
         /**
          * Registers a function that can fetch version list for a given [OutgoingContent]
          */
-        fun version(provider: (OutgoingContent) -> List<Version>) {
+        fun version(provider: suspend (OutgoingContent) -> List<Version>) {
             versionProviders.add(provider)
         }
     }
@@ -58,7 +58,7 @@ class ConditionalHeaders(private val versionProviders: List<(OutgoingContent) ->
 
     private fun checkVersions(call: ApplicationCall, versions: List<Version>): VersionCheckResult {
         for (version in versions) {
-            val result = version.check(call)
+            val result = version.check(call.request.headers)
             if (result != VersionCheckResult.OK) {
                 return result
             }
@@ -69,7 +69,7 @@ class ConditionalHeaders(private val versionProviders: List<(OutgoingContent) ->
     /**
      * Retrieves versions such as [LastModifiedVersion] or [EntityTagVersion] for a given content
      */
-    fun versionsFor(content: OutgoingContent): List<Version> {
+    suspend fun versionsFor(content: OutgoingContent): List<Version> {
         return versionProviders.flatMapTo(ArrayList(versionProviders.size)) { it(content) }
     }
 
@@ -78,13 +78,21 @@ class ConditionalHeaders(private val versionProviders: List<(OutgoingContent) ->
      */
     companion object Feature : ApplicationFeature<ApplicationCallPipeline, Configuration, ConditionalHeaders> {
         override val key = AttributeKey<ConditionalHeaders>("Conditional Headers")
-        override fun install(pipeline: ApplicationCallPipeline, configure: Configuration.() -> Unit): ConditionalHeaders {
+        override fun install(
+            pipeline: ApplicationCallPipeline,
+            configure: Configuration.() -> Unit
+        ): ConditionalHeaders {
             val configuration = Configuration().apply(configure)
             val feature = ConditionalHeaders(configuration.versionProviders)
 
             // Intercept response pipeline and after the content is ready to be served
             // check if it needs to be served according to conditions
-            pipeline.sendPipeline.intercept(ApplicationSendPipeline.After) { message -> feature.interceptor(this, message) }
+            pipeline.sendPipeline.intercept(ApplicationSendPipeline.After) { message ->
+                feature.interceptor(
+                    this,
+                    message
+                )
+            }
 
             return feature
         }
@@ -102,7 +110,7 @@ class ConditionalHeaders(private val versionProviders: List<(OutgoingContent) ->
 @Deprecated("Use configuration for ConditionalHeaders")
 suspend fun ApplicationCall.withETag(etag: String, putHeader: Boolean = true, block: suspend () -> Unit) {
     val version = EntityTagVersion(etag)
-    val result = version.check(this)
+    val result = version.check(request.headers)
     if (putHeader) {
         // TODO: use version.appendHeader
         response.header(HttpHeaders.ETag, etag)
@@ -112,12 +120,6 @@ suspend fun ApplicationCall.withETag(etag: String, putHeader: Boolean = true, bl
         VersionCheckResult.PRECONDITION_FAILED -> respond(result.statusCode)
         VersionCheckResult.OK -> block()
     }
-}
-
-@Deprecated("Use configuration for ConditionalHeaders")
-suspend fun ApplicationCall.withLastModified(lastModified: ZonedDateTime, putHeader: Boolean = true, block: suspend () -> Unit) {
-    @Suppress("DEPRECATION")
-    withLastModified(lastModified.toLocalDateTime(), putHeader, block)
 }
 
 /**
@@ -133,10 +135,14 @@ suspend fun ApplicationCall.withLastModified(lastModified: ZonedDateTime, putHea
  * See https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.28 and
  *  https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.25
  */
-@Deprecated("Use configuration for ConditionalHeaders")
-suspend fun ApplicationCall.withLastModified(lastModified: LocalDateTime, putHeader: Boolean = true, block: suspend () -> Unit) {
+@Deprecated("Use configuration for ConditionalHeaders", level = DeprecationLevel.ERROR)
+suspend fun ApplicationCall.withLastModified(
+    lastModified: ZonedDateTime,
+    putHeader: Boolean = true,
+    block: suspend () -> Unit
+) {
     val version = LastModifiedVersion(lastModified)
-    val result = version.check(this)
+    val result = version.check(request.headers)
 
     if (putHeader) {
         // TODO: use version.appendHeader
@@ -163,7 +169,9 @@ val OutgoingContent.defaultVersions: List<Version>
         val lastModifiedHeaders = headers.getAll(HttpHeaders.LastModified) ?: emptyList()
         val etagHeaders = headers.getAll(HttpHeaders.ETag) ?: emptyList()
         val versions = ArrayList<Version>(lastModifiedHeaders.size + etagHeaders.size)
-        lastModifiedHeaders.mapTo(versions) { LastModifiedVersion(LocalDateTime.parse(it, httpDateFormat)) }
+        lastModifiedHeaders.mapTo(versions) {
+            LastModifiedVersion(ZonedDateTime.parse(it, httpDateFormat))
+        }
         etagHeaders.mapTo(versions) { EntityTagVersion(it) }
         return versions
     }

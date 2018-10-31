@@ -62,16 +62,31 @@ class CommandLineTest {
 
     @Test
     fun testJar() {
-        val jar = findContainingZipFile(CommandLineTest::class.java.classLoader.getResources("java/util/ArrayList.class").nextElement().toURI())
-        val urlClassLoader = commandLineEnvironment(arrayOf("-jar=${jar.absolutePath}")).classLoader as URLClassLoader
-        assertEquals(jar.toURI(), urlClassLoader.urLs.single().toURI())
+        val (file, uri) = findContainingZipFileOrUri(
+            CommandLineTest::class.java.classLoader.getResources("java/util/ArrayList.class").nextElement().toURI()
+        )
+
+        val opt = if (file != null) file.absolutePath else uri!!.toASCIIString()
+        val expectedUri = uri ?: file!!.toURI()
+
+        val urlClassLoader = commandLineEnvironment(arrayOf("-jar=$opt")).classLoader as URLClassLoader
+        assertEquals(expectedUri, urlClassLoader.urLs.single().toURI())
     }
 
-    private tailrec fun findContainingZipFile(uri: URI): File {
+    @Test
+    fun configFileWithEnvironmentVariables() {
+        val configPath = CommandLineTest::class.java.classLoader.getResource("applicationWithEnv.conf").toURI().path
+        val port = commandLineEnvironment(arrayOf("-config=$configPath")).config.property("ktor.deployment.port").getString()
+        assertEquals("8080", port)
+    }
+
+    private tailrec fun findContainingZipFileOrUri(uri: URI): Pair<File?, URI?> {
         if (uri.scheme == "file") {
-            return File(uri.path.substringBefore("!"))
+            return Pair(File(uri.path.substringBefore("!")), null)
+        } else if (uri.scheme == "jrt") {
+            return Pair(null, uri)
         } else {
-            return findContainingZipFile(URI(uri.rawSchemeSpecificPart))
+            return findContainingZipFileOrUri(URI(uri.rawSchemeSpecificPart))
         }
     }
 
@@ -88,8 +103,9 @@ class CommandLineTest {
 
         private fun withIsolatedClassLoader(block: (ClassLoader) -> Unit) {
             val classLoader = IsolatedResourcesClassLoader(
-                    File("ktor-server/ktor-server-host-common/test-resources").absoluteFile,
-                    block::class.java.classLoader)
+                File("ktor-server/ktor-server-host-common/test-resources").absoluteFile,
+                block::class.java.classLoader
+            )
 
             val oldClassLoader = Thread.currentThread().contextClassLoader
             Thread.currentThread().contextClassLoader = classLoader

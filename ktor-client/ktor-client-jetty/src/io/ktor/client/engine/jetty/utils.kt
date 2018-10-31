@@ -1,13 +1,13 @@
 package io.ktor.client.engine.jetty
 
-import kotlinx.coroutines.experimental.*
+import kotlinx.coroutines.*
 import org.eclipse.jetty.util.*
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 
-internal suspend fun <R> withPromise(block: (Promise<R>) -> Unit): R {
-    return suspendCancellableCoroutine { continuation ->
-        block(PromiseContinuation(continuation))
-    }
+internal suspend fun <R> withPromise(
+    block: (Promise<R>) -> Unit
+): R = suspendCancellableCoroutine { continuation ->
+    block(PromiseContinuation(continuation))
 }
 
 internal class PromiseContinuation<R>(private val continuation: Continuation<R>) : Promise<R> {
@@ -17,15 +17,5 @@ internal class PromiseContinuation<R>(private val continuation: Continuation<R>)
 
     override fun succeeded(result: R) {
         continuation.resume(result)
-    }
-}
-
-internal class CallbackContinuation(val continuation: Continuation<Unit>) : Callback {
-    override fun succeeded() {
-        continuation.resume(Unit)
-    }
-
-    override fun failed(x: Throwable) {
-        continuation.resumeWithException(x)
     }
 }

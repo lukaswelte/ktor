@@ -31,29 +31,24 @@ class UserHashedTableAuthTest {
         testSingle(UserHashedTableAuth(mapConfig.config("auth")))
     }
 
-    fun testSingle(hashedUserTable: UserHashedTableAuth) {
+    private fun testSingle(hashedUserTable: UserHashedTableAuth) {
         withTestApplication {
-            application.routing {
-                route("/redirect") {
-                    authentication {
-                        formAuthentication(
-                                challenge = FormAuthChallenge.Redirect({ _, _ -> "/unauthorized" }),
-                                validate = { hashedUserTable.authenticate(it) }
-                        )
-                    }
-                    post {
-                        call.respondText("ok")
-                    }
+            application.install(Authentication) {
+                form {
+                    challenge = FormAuthChallenge.Redirect({ "/unauthorized" })
+                    validate { hashedUserTable.authenticate(it) }
                 }
-                route("/deny") {
-                    authentication {
-                        formAuthentication(
-                                validate = { hashedUserTable.authenticate(it) }
-                        )
-                    }
-                    post {
-                        call.respondText("ok")
-                    }
+                form("checkOnly") {
+                    validate { hashedUserTable.authenticate(it) }
+                }
+            }
+
+            application.routing {
+                authenticate {
+                    post("/redirect") { call.respondText("ok") }
+                }
+                authenticate("checkOnly") {
+                    post("/deny") { call.respondText("ok") }
                 }
             }
 
@@ -90,13 +85,15 @@ class UserHashedTableAuthTest {
         }
     }
 
-    fun TestApplicationEngine.handlePost(uri: String, user: String? = null, password: String? = null): TestApplicationCall {
+    private fun TestApplicationEngine.handlePost(uri: String, user: String? = null, password: String? = null): TestApplicationCall {
         return handleRequest(HttpMethod.Post, uri) {
             addHeader(HttpHeaders.ContentType, ContentType.Application.FormUrlEncoded.toString())
-            body = Parameters.build {
-                if (user != null) append("user", user)
-                if (password != null) append("password", password)
-            }.formUrlEncode()
+            setBody(
+                    Parameters.build {
+                        if (user != null) append("user", user)
+                        if (password != null) append("password", password)
+                    }.formUrlEncode()
+            )
         }
     }
 }

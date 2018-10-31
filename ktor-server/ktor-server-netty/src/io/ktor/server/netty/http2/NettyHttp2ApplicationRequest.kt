@@ -9,21 +9,42 @@ import io.netty.handler.codec.http.*
 import io.netty.handler.codec.http.HttpMethod
 import io.netty.handler.codec.http.multipart.*
 import io.netty.handler.codec.http2.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.io.*
 import java.net.*
+import kotlin.coroutines.*
 
 internal class NettyHttp2ApplicationRequest(
-        call: ApplicationCall,
-        context: ChannelHandlerContext,
-        val nettyHeaders: Http2Headers,
-        val contentByteChannel: ByteChannel = ByteChannel())
-    : NettyApplicationRequest(call, context, contentByteChannel, nettyHeaders[":path"]?.toString() ?: "/", keepAlive = true) {
+    call: ApplicationCall,
+    coroutineContext: CoroutineContext,
+    context: ChannelHandlerContext,
+    val nettyHeaders: Http2Headers,
+    val contentByteChannel: ByteChannel = ByteChannel()
+) : NettyApplicationRequest(
+    call,
+    coroutineContext,
+    context,
+    contentByteChannel,
+    nettyHeaders[":path"]?.toString() ?: "/",
+    keepAlive = true
+) {
 
-    override val headers: Headers by lazy { Headers.build { nettyHeaders.forEach { append(it.key.toString(), it.value.toString()) } } }
+    override val headers: Headers by lazy {
+        Headers.build {
+            nettyHeaders.forEach {
+                append(
+                    it.key.toString(),
+                    it.value.toString()
+                )
+            }
+        }
+    }
 
-    val contentActor = actor<Http2DataFrame>(Unconfined, kotlinx.coroutines.experimental.channels.Channel.UNLIMITED) {
+    @UseExperimental(ObsoleteCoroutinesApi::class)
+    val contentActor = actor<Http2DataFrame>(
+        Dispatchers.Unconfined, kotlinx.coroutines.channels.Channel.UNLIMITED
+    ) {
         http2frameLoop(contentByteChannel)
     }
 
@@ -31,8 +52,6 @@ internal class NettyHttp2ApplicationRequest(
 
     override val cookies: RequestCookies
         get() = throw UnsupportedOperationException()
-
-    override fun receiveContent() = NettyHttpIncomingContent(this)
 
     override fun newDecoder(): HttpPostMultipartRequestDecoder {
         val hh = DefaultHttpHeaders(false)

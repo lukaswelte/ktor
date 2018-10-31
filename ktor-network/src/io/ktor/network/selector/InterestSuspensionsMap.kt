@@ -1,8 +1,11 @@
 package io.ktor.network.selector
 
-import kotlinx.coroutines.experimental.*
+import io.ktor.util.*
+import kotlinx.coroutines.*
 import java.util.concurrent.atomic.*
 
+@Suppress("KDocMissingDocumentation")
+@InternalAPI
 class InterestSuspensionsMap {
     @Volatile
     @Suppress("unused")
@@ -26,12 +29,6 @@ class InterestSuspensionsMap {
         if (!updater.compareAndSet(this, null, continuation)) {
             throw IllegalStateException("Handler for ${interest.name} is already registered")
         }
-
-        continuation.invokeOnCompletion { if (continuation.isCancelled) dropHandler(interest, continuation) }
-    }
-
-    inline fun invokeIfPresent(interest: SelectInterest, block: CancellableContinuation<Unit>.() -> Unit): Boolean {
-        return removeSuspension(interest)?.run { block(); true } ?: false
     }
 
     @Suppress("LoopToCallChain")
@@ -56,10 +53,6 @@ class InterestSuspensionsMap {
 
     override fun toString(): String {
         return "R $readHandlerReference W $writeHandlerReference C $connectHandlerReference A $acceptHandlerReference"
-    }
-
-    private fun dropHandler(interest: SelectInterest, continuation: CancellableContinuation<Unit>) {
-        updater(interest).compareAndSet(this, continuation, null)
     }
 
     companion object {

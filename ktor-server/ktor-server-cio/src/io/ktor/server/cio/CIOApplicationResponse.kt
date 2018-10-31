@@ -1,15 +1,15 @@
 package io.ktor.server.cio
 
-import io.ktor.content.*
 import io.ktor.http.*
 import io.ktor.http.cio.*
+import io.ktor.http.content.*
 import io.ktor.response.*
 import io.ktor.server.engine.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
-import kotlin.coroutines.experimental.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
+import kotlin.coroutines.*
 
-class CIOApplicationResponse(call: CIOApplicationCall,
+internal class CIOApplicationResponse(call: CIOApplicationCall,
                              private val output: ByteWriteChannel,
                              private val input: ByteReadChannel,
                              private val engineDispatcher: CoroutineContext,
@@ -24,12 +24,6 @@ class CIOApplicationResponse(call: CIOApplicationCall,
 
     @Volatile
     private var chunkedJob: Job? = null
-
-    init {
-        pipeline.intercept(ApplicationSendPipeline.Engine) {
-            call.release()
-        }
-    }
 
     override val headers = object : ResponseHeaders() {
         override fun engineAppendHeader(name: String, value: String) {
@@ -80,8 +74,6 @@ class CIOApplicationResponse(call: CIOApplicationCall,
         }
     }
 
-    private fun hasHeader(name: String) = headersNames.any { it.equals(name, ignoreCase = true) }
-
     override suspend fun responseChannel(): ByteWriteChannel {
         sendResponseMessage(false)
         return preparedBodyChannel()
@@ -100,7 +92,7 @@ class CIOApplicationResponse(call: CIOApplicationCall,
     override suspend fun respondFromBytes(bytes: ByteArray) {
         sendResponseMessage(contentReady = true)
         val channel = preparedBodyChannel()
-        return withContext<Unit>(Unconfined) {
+        return withContext<Unit>(Dispatchers.Unconfined) {
             channel.writeFully(bytes)
             channel.close()
         }
@@ -143,7 +135,7 @@ class CIOApplicationResponse(call: CIOApplicationCall,
         val chunked = headers[HttpHeaders.TransferEncoding] == "chunked"
         if (!chunked) return output
 
-        val encoderJob = encodeChunked(output, engineDispatcher)
+        val encoderJob = encodeChunked(output, Dispatchers.Unconfined)
         val chunkedOutput = encoderJob.channel
 
         chunkedChannel = chunkedOutput

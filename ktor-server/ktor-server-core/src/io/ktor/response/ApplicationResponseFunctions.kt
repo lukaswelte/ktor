@@ -1,8 +1,11 @@
+@file:Suppress("unused")
+
 package io.ktor.response
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.http.*
+import io.ktor.util.*
 import java.io.*
 
 /**
@@ -27,7 +30,15 @@ suspend inline fun ApplicationCall.respond(status: HttpStatusCode, message: Any)
  */
 suspend fun ApplicationCall.respondRedirect(url: String, permanent: Boolean = false) {
     response.headers.append(HttpHeaders.Location, url)
-    return respond(if (permanent) HttpStatusCode.MovedPermanently else HttpStatusCode.Found)
+    respond(if (permanent) HttpStatusCode.MovedPermanently else HttpStatusCode.Found)
+}
+
+/**
+ * Responds to a client with a `301 Moved Permanently` or `302 Found` redirect.
+ * Unlike the other [respondRedirect] it provides a way to build URL based on current call using [block] function
+ */
+suspend inline fun ApplicationCall.respondRedirect(permanent: Boolean = false, block: URLBuilder.() -> Unit) {
+    respondRedirect(url(block), permanent)
 }
 
 /**
@@ -37,7 +48,7 @@ suspend fun ApplicationCall.respondRedirect(url: String, permanent: Boolean = fa
  */
 suspend fun ApplicationCall.respondText(text: String, contentType: ContentType? = null, status: HttpStatusCode? = null, configure: OutgoingContent.() -> Unit = {}) {
     val message = TextContent(text, defaultTextContentType(contentType), status).apply(configure)
-    return respond(message)
+    respond(message)
 }
 
 /**
@@ -47,7 +58,25 @@ suspend fun ApplicationCall.respondText(text: String, contentType: ContentType? 
  */
 suspend fun ApplicationCall.respondText(contentType: ContentType? = null, status: HttpStatusCode? = null, provider: suspend () -> String) {
     val message = TextContent(provider(), defaultTextContentType(contentType), status)
-    return respond(message)
+    respond(message)
+}
+
+/**
+ * Responds to a client with a raw bytes response, using specified [provider] to build a byte array
+ * @param contentType is an optional [ContentType], unspecified by default
+ * @param status is an optional [HttpStatusCode], default is [HttpStatusCode.OK]
+ */
+suspend fun ApplicationCall.respondBytes(contentType: ContentType? = null, status: HttpStatusCode? = null, provider: suspend () -> ByteArray) {
+    respond(ByteArrayContent(provider(), contentType, status))
+}
+
+/**
+ * Responds to a client with a raw bytes response, using specified [bytes]
+ * @param contentType is an optional [ContentType], unspecified by default
+ * @param status is an optional [HttpStatusCode], default is [HttpStatusCode.OK]
+ */
+suspend fun ApplicationCall.respondBytes(bytes: ByteArray, contentType: ContentType? = null, status: HttpStatusCode? = null, configure: OutgoingContent.() -> Unit = {}) {
+    respond(ByteArrayContent(bytes, contentType, status).apply(configure))
 }
 
 /**
@@ -55,7 +84,7 @@ suspend fun ApplicationCall.respondText(contentType: ContentType? = null, status
  */
 suspend fun ApplicationCall.respondFile(baseDir: File, fileName: String, configure: OutgoingContent.() -> Unit = {}) {
     val message = LocalFileContent(baseDir, fileName).apply(configure)
-    return respond(message)
+    respond(message)
 }
 
 /**
@@ -63,17 +92,38 @@ suspend fun ApplicationCall.respondFile(baseDir: File, fileName: String, configu
  */
 suspend fun ApplicationCall.respondFile(file: File, configure: OutgoingContent.() -> Unit = {}) {
     val message = LocalFileContent(file).apply(configure)
-    return respond(message)
+    respond(message)
 }
 
 /**
- * Respond with content producer.
+ * Respond with text content writer.
  *
- * The [writer] parameter will be called later when engine is ready to produce content. You don't need to close it.
+ * The [writer] parameter will be called later when engine is ready to produce content. 
+ * Provided [Writer] will be closed automatically.
  */
-suspend fun ApplicationCall.respondWrite(contentType: ContentType? = null, status: HttpStatusCode? = null, writer: suspend Writer.() -> Unit) {
+suspend fun ApplicationCall.respondTextWriter(contentType: ContentType? = null, status: HttpStatusCode? = null, writer: suspend Writer.() -> Unit) {
     val message = WriterContent(writer, defaultTextContentType(contentType), status)
-    return respond(message)
+    respond(message)
+}
+
+@Suppress("KDocMissingDocumentation")
+@Deprecated(
+    "Use respondTextWriter if you need to send text, otherwise use respondOutputStream",
+    replaceWith = ReplaceWith("respondTextWriter(contentType, status, writer)")
+)
+suspend fun ApplicationCall.respondWrite(contentType: ContentType? = null, status: HttpStatusCode? = null, writer: suspend Writer.() -> Unit) {
+    respondTextWriter(contentType, status, writer)
+}
+
+/**
+ * Respond with binary content producer.
+ *
+ * The [producer] parameter will be called later when engine is ready to produce content. You don't need to close it.
+ * Provided [OutputStream] will be closed automatically.
+ */
+suspend fun ApplicationCall.respondOutputStream(contentType: ContentType? = null, status: HttpStatusCode? = null, producer: suspend OutputStream.() -> Unit) {
+    val message = OutputStreamContent(producer, contentType ?: ContentType.Application.OctetStream, status)
+    respond(message)
 }
 
 /**

@@ -11,10 +11,10 @@ import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.engine.*
 import io.ktor.server.jetty.*
-import kotlinx.coroutines.experimental.*
-import org.junit.*
-import org.junit.Assert.*
+import kotlinx.coroutines.*
+import java.util.concurrent.*
 import java.util.concurrent.atomic.*
+import kotlin.test.*
 
 
 abstract class CacheTest(private val factory: HttpClientEngineFactory<*>) : TestWithKtor() {
@@ -43,6 +43,7 @@ abstract class CacheTest(private val factory: HttpClientEngineFactory<*>) : Test
             get("/etag") {
                 val etag = if (counter.get() < 2) "0" else "1"
                 counter.incrementAndGet()
+                @Suppress("DEPRECATION")
                 call.withETag(etag) {
                     call.respondText(counter.get().toString())
                 }
@@ -51,45 +52,37 @@ abstract class CacheTest(private val factory: HttpClientEngineFactory<*>) : Test
     }
 
     @Test
-    fun testDisabled() {
+    fun testDisabled() = runBlocking {
         val client = HttpClient(factory) {
 //            install(HttpCache)
         }
 
-        val builder = HttpRequestBuilder().apply {
-            url(port = serverPort)
-        }
+        val builder = HttpRequestBuilder(port = serverPort)
 
-        runBlocking {
-            listOf("/nocache", "/nostore").forEach {
-                builder.url.encodedPath = it
-                assertNotEquals(client.get<String>(builder), client.get<String>(builder))
-            }
+        listOf("/nocache", "/nostore").forEach {
+            builder.url.encodedPath = it
+            assertNotEquals(client.get<String>(builder), client.get(builder))
         }
 
         client.close()
     }
 
     @Test
-    fun maxAge() {
+    fun maxAge() = runBlocking {
         val client = HttpClient(factory) {
 //            install(HttpCache)
         }
 
         val results = mutableListOf<String>()
-        val request = HttpRequestBuilder().apply {
-            url(path = "/maxAge", port = serverPort)
-        }
+        val request = HttpRequestBuilder(path = "/maxAge", port = serverPort)
 
-        runBlocking {
-            results += client.get<String>(request)
-            results += client.get<String>(request)
+        results += client.get<String>(request)
+        results += client.get<String>(request)
 
-            Thread.sleep(7 * 1000)
+        Thread.sleep(TimeUnit.SECONDS.toMillis(7))
 
-            results += client.get<String>(request)
-            results += client.get<String>(request)
-        }
+        results += client.get<String>(request)
+        results += client.get<String>(request)
 
         assertEquals(results[0], results[1])
         assertEquals(results[2], results[3])

@@ -3,17 +3,30 @@ package io.ktor.server.jetty
 import io.ktor.response.*
 import io.ktor.server.jetty.internal.*
 import io.ktor.server.servlet.*
+import io.ktor.util.*
 import org.eclipse.jetty.server.*
 import javax.servlet.http.*
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 
-class JettyApplicationResponse(call: AsyncServletApplicationCall,
-                               servletRequest: HttpServletRequest,
-                               servletResponse: HttpServletResponse,
-                               engineContext: CoroutineContext,
-                               userContext: CoroutineContext,
-                               private val baseRequest: Request)
-    : AsyncServletApplicationResponse(call, servletRequest, servletResponse, engineContext, userContext, JettyUpgradeImpl) {
+@Suppress("KDocMissingDocumentation")
+@InternalAPI
+class JettyApplicationResponse(
+    call: AsyncServletApplicationCall,
+    servletRequest: HttpServletRequest,
+    servletResponse: HttpServletResponse,
+    engineContext: CoroutineContext,
+    userContext: CoroutineContext,
+    private val baseRequest: Request,
+    coroutineContext: CoroutineContext
+) : AsyncServletApplicationResponse(
+    call,
+    servletRequest,
+    servletResponse,
+    engineContext,
+    userContext,
+    JettyUpgradeImpl,
+    coroutineContext
+) {
 
     override fun push(builder: ResponsePushBuilder) {
         if (baseRequest.isPushSupported) {

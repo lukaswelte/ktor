@@ -1,10 +1,10 @@
 package io.ktor.request
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
-import kotlinx.coroutines.experimental.io.*
+import io.ktor.util.pipeline.*
+import kotlinx.coroutines.io.*
 import java.io.*
 import kotlin.reflect.*
 
@@ -21,6 +21,10 @@ class ApplicationReceiveRequest(val type: KClass<*>, val value: Any)
  * When executed, this pipeline starts with an instance of [ByteReadChannel] and should finish with the requested type.
  */
 open class ApplicationReceivePipeline : Pipeline<ApplicationReceiveRequest, ApplicationCall>(Before, Transform, After) {
+    /**
+     * Pipeline phases
+     */
+    @Suppress("PublicApiImplicitType")
     companion object Phases {
         /**
          * Executes before any transformations are made
@@ -59,7 +63,15 @@ suspend inline fun <reified T : Any> ApplicationCall.receive(): T = receive(T::c
  * @throws ContentTransformationException when content cannot be transformed to the requested type.
  */
 suspend fun <T : Any> ApplicationCall.receive(type: KClass<T>): T {
-    return receiveOrNull(type) ?: throw ContentTransformationException("Cannot transform this request's content to $type")
+    val incomingContent = request.receiveChannel()
+    val receiveRequest = ApplicationReceiveRequest(type, incomingContent)
+    val transformed = request.pipeline.execute(this, receiveRequest).value
+
+    if (!type.isInstance(transformed))
+        throw CannotTransformToTypeException(type)
+
+    @Suppress("UNCHECKED_CAST")
+    return transformed as T
 }
 
 /**
@@ -68,14 +80,12 @@ suspend fun <T : Any> ApplicationCall.receive(type: KClass<T>): T {
  * @return instance of [T] received from this call, or `null` if content cannot be transformed to the requested type..
  */
 suspend fun <T : Any> ApplicationCall.receiveOrNull(type: KClass<T>): T? {
-    val incomingContent = request.receiveChannel()
-    val receiveRequest = ApplicationReceiveRequest(type, incomingContent)
-    val transformed = request.pipeline.execute(this, receiveRequest).value
-    if (transformed is ByteReadChannel && type != ByteReadChannel::class)
-        return null
-
-    @Suppress("UNCHECKED_CAST")
-    return transformed as? T
+    return try {
+        receive(type)
+    } catch (cause: ContentTransformationException) {
+        application.log.debug("Conversion failed, null returned", cause)
+        null
+    }
 }
 
 /**
@@ -121,4 +131,7 @@ suspend inline fun ApplicationCall.receiveParameters(): Parameters = receive()
 /**
  * Thrown when content cannot be transformed to the desired type.
  */
-class ContentTransformationException(message: String) : Exception(message)
+abstract class ContentTransformationException(message: String) : Exception(message)
+
+private class CannotTransformToTypeException(type: KClass<*>)
+    : ContentTransformationException("Cannot transform this request's content to $type")

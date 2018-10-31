@@ -1,13 +1,15 @@
 package io.ktor.application
 
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.request.*
 import io.ktor.response.*
+import kotlinx.coroutines.*
 
 /**
  * Pipeline configuration for executing [ApplicationCall] instances
  */
-open class ApplicationCallPipeline : Pipeline<Unit, ApplicationCall>(Infrastructure, Call, Fallback) {
+@Suppress("PublicApiImplicitType")
+open class ApplicationCallPipeline : Pipeline<Unit, ApplicationCall>(Setup, Monitoring, Features, Call, Fallback) {
     /**
      * Pipeline for receiving content
      */
@@ -23,9 +25,28 @@ open class ApplicationCallPipeline : Pipeline<Unit, ApplicationCall>(Infrastruct
      */
     companion object ApplicationPhase {
         /**
+         * Phase for preparing call and it's attributes for processing
+         */
+        val Setup = PipelinePhase("Setup")
+
+        /**
+         * Phase for tracing calls, useful for logging, metrics, error handling and so on
+         */
+        val Monitoring = PipelinePhase("Monitoring")
+
+        /**
+         * Phase for features. Most features should intercept this phase.
+         */
+        val Features = PipelinePhase("Features")
+
+        /**
          * Phase for setting up infrastructure for processing a call
          */
-        val Infrastructure = PipelinePhase("Infrastructure")
+        @Suppress("unused")
+        @Deprecated("Infrastructure phase has been split into Features and Monitoring phases",
+                ReplaceWith("ApplicationCallPipeline.Features", "io.ktor.application.ApplicationCallPipeline"),
+                level = DeprecationLevel.ERROR)
+        val Infrastructure: PipelinePhase get() = Features
 
         /**
          * Phase for processing a call and sending a response
@@ -47,4 +68,4 @@ inline val PipelineContext<*, ApplicationCall>.call: ApplicationCall get() = con
 /**
  * Current application for the context
  */
-val PipelineContext<*, ApplicationCall>.application get() = call.application
+val PipelineContext<*, ApplicationCall>.application: Application get() = call.application

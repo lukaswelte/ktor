@@ -1,55 +1,61 @@
 package io.ktor.features
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.util.cio.*
+import io.ktor.http.content.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.util.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
+import kotlin.coroutines.*
 
 /**
  * Compression feature configuration
  */
 data class CompressionOptions(
-        /**
-         * Map of encoder configurations
-         */
-        val encoders: Map<String, CompressionEncoderConfig> = emptyMap(),
-        /**
-         * Conditions for all encoders
-         */
-        val conditions: List<ApplicationCall.(OutgoingContent) -> Boolean> = emptyList()
+    /**
+     * Map of encoder configurations
+     */
+    val encoders: Map<String, CompressionEncoderConfig> = emptyMap(),
+    /**
+     * Conditions for all encoders
+     */
+    val conditions: List<ApplicationCall.(OutgoingContent) -> Boolean> = emptyList()
 )
 
 /**
  * Configuration for an encoder
  */
 data class CompressionEncoderConfig(
-        /**
-         * Name of the encoder, matched against entry in `Accept-Encoding` header
-         */
-        val name: String,
-        /**
-         * Encoder implementation
-         */
-        val encoder: CompressionEncoder,
-        /**
-         * Conditions for the encoder
-         */
-        val conditions: List<ApplicationCall.(OutgoingContent) -> Boolean>,
-        /**
-         * Priority of the encoder
-         */
-        val priority: Double)
+    /**
+     * Name of the encoder, matched against entry in `Accept-Encoding` header
+     */
+    val name: String,
+    /**
+     * Encoder implementation
+     */
+    val encoder: CompressionEncoder,
+    /**
+     * Conditions for the encoder
+     */
+    val conditions: List<ApplicationCall.(OutgoingContent) -> Boolean>,
+    /**
+     * Priority of the encoder
+     */
+    val priority: Double
+)
 
 /**
  * Feature to compress a response based on conditions and ability of client to decompress it
  */
 class Compression(compression: Configuration) {
     private val options = compression.build()
-    private val comparator = compareBy<Pair<CompressionEncoderConfig, HeaderValue>>({ it.second.quality }, { it.first.priority }).reversed()
+    private val comparator = compareBy<Pair<CompressionEncoderConfig, HeaderValue>>(
+        { it.second.quality }, { it.first.priority }
+    ).reversed()
 
     private suspend fun interceptor(context: PipelineContext<Any, ApplicationCall>) {
         val call = context.call
@@ -59,27 +65,26 @@ class Compression(compression: Configuration) {
             return
 
         val encoders = parseHeaderValue(acceptEncodingRaw)
-                .filter { it.value == "*" || it.value in options.encoders }
-                .flatMap { header ->
-                    when (header.value) {
-                        "*" -> options.encoders.values.map { it to header }
-                        else -> options.encoders[header.value]?.let { listOf(it to header) } ?: emptyList()
-                    }
+            .filter { it.value == "*" || it.value in options.encoders }
+            .flatMap { header ->
+                when (header.value) {
+                    "*" -> options.encoders.values.map { it to header }
+                    else -> options.encoders[header.value]?.let { listOf(it to header) } ?: emptyList()
                 }
-                .sortedWith(comparator)
-                .map { it.first }
+            }
+            .sortedWith(comparator)
+            .map { it.first }
 
         if (!encoders.isNotEmpty())
             return
 
         if (message is OutgoingContent
-                && message !is CompressedResponse
-                && options.conditions.all { it(call, message) }
-                && !call.isCompressionSuppressed()
-                && message.headers[HttpHeaders.ContentEncoding].let { it == null || it == "identity" }
-                ) {
-
-            val encoderOptions = encoders.firstOrNull { it.conditions.all { it(call, message) } }
+            && message !is CompressedResponse
+            && options.conditions.all { it(call, message) }
+            && !call.isCompressionSuppressed()
+            && message.headers[HttpHeaders.ContentEncoding].let { it == null || it != "identity" }
+        ) {
+            val encoderOptions = encoders.firstOrNull { encoder -> encoder.conditions.all { it(call, message) } }
 
             val channel: () -> ByteReadChannel = when (message) {
                 is OutgoingContent.ReadChannelContent -> ({ message.readFrom() })
@@ -103,10 +108,12 @@ class Compression(compression: Configuration) {
         }
     }
 
-    private class CompressedResponse(val original: OutgoingContent,
-                                     val delegateChannel: () -> ByteReadChannel,
-                                     val encoding: String,
-                                     val encoder: CompressionEncoder) : OutgoingContent.ReadChannelContent() {
+    private class CompressedResponse(
+        val original: OutgoingContent,
+        val delegateChannel: () -> ByteReadChannel,
+        val encoding: String,
+        val encoder: CompressionEncoder
+    ) : OutgoingContent.ReadChannelContent() {
         override fun readFrom() = encoder.compress(delegateChannel())
         override val headers by lazy(LazyThreadSafetyMode.NONE) {
             Headers.build {
@@ -121,9 +128,11 @@ class Compression(compression: Configuration) {
         override fun <T : Any> setProperty(key: AttributeKey<T>, value: T?) = original.setProperty(key, value)
     }
 
-    private class CompressedWriteResponse(val original: WriteChannelContent,
-                                          val encoding: String,
-                                          val encoder: CompressionEncoder) : OutgoingContent.WriteChannelContent() {
+    private class CompressedWriteResponse(
+        val original: WriteChannelContent,
+        val encoding: String,
+        val encoder: CompressionEncoder
+    ) : OutgoingContent.WriteChannelContent() {
         override val headers by lazy(LazyThreadSafetyMode.NONE) {
             Headers.build {
                 appendFiltered(original.headers) { name, _ -> !name.equals(HttpHeaders.ContentLength, true) }
@@ -137,7 +146,11 @@ class Compression(compression: Configuration) {
         override fun <T : Any> setProperty(key: AttributeKey<T>, value: T?) = original.setProperty(key, value)
 
         override suspend fun writeTo(channel: ByteWriteChannel) {
-            original.writeTo(encoder.compress(channel))
+            coroutineScope {
+                encoder.compress(channel, coroutineContext).use {
+                    original.writeTo(this)
+                }
+            }
         }
     }
 
@@ -145,6 +158,9 @@ class Compression(compression: Configuration) {
      * `ApplicationFeature` implementation for [Compression]
      */
     companion object Feature : ApplicationFeature<ApplicationCallPipeline, Configuration, Compression> {
+        /**
+         * Attribute that could be added to an application call to prevent it's response from being compressed
+         */
         val SuppressionAttribute = AttributeKey<Boolean>("preventCompression")
 
         override val key = AttributeKey<Compression>("Compression")
@@ -164,9 +180,13 @@ class Compression(compression: Configuration) {
     /**
      * Configuration builder for Compression feature
      */
-    class Configuration() : ConditionsHolderBuilder {
-        val encoders = hashMapOf<String, CompressionEncoderBuilder>()
-        override val conditions = arrayListOf<ApplicationCall.(OutgoingContent) -> Boolean>()
+    class Configuration : ConditionsHolderBuilder {
+        /**
+         * Encoders map by names
+         */
+        val encoders: MutableMap<String, CompressionEncoderBuilder> = hashMapOf()
+
+        override val conditions: MutableList<ApplicationCall.(OutgoingContent) -> Boolean> = arrayListOf()
 
         /**
          * Appends an encoder to the configuration
@@ -192,9 +212,9 @@ class Compression(compression: Configuration) {
         /**
          * Builds `CompressionOptions`
          */
-        fun build() = CompressionOptions(
-                encoders = encoders.mapValues { it.value.build() },
-                conditions = conditions.toList()
+        fun build(): CompressionOptions = CompressionOptions(
+            encoders = encoders.mapValues { it.value.build() },
+            conditions = conditions.toList()
         )
     }
 
@@ -205,53 +225,81 @@ private fun ApplicationCall.isCompressionSuppressed() = Compression.SuppressionA
 /**
  * Represents a Compression encoder
  */
+@KtorExperimentalAPI
+@UseExperimental(ExperimentalCoroutinesApi::class)
 interface CompressionEncoder {
     /**
      * Wraps [readChannel] into a compressing [ByteReadChannel]
      */
-    fun compress(readChannel: ByteReadChannel): ByteReadChannel
+    fun compress(
+        readChannel: ByteReadChannel,
+        coroutineContext: CoroutineContext = Dispatchers.Unconfined
+    ): ByteReadChannel
 
     /**
      * Wraps [writeChannel] into a compressing [ByteWriteChannel]
      */
-    fun compress(writeChannel: ByteWriteChannel): ByteWriteChannel
+    fun compress(
+        writeChannel: ByteWriteChannel,
+        coroutineContext: CoroutineContext = Dispatchers.Unconfined
+    ): ByteWriteChannel
 }
 
 /**
  * Implementation of the gzip encoder
  */
 object GzipEncoder : CompressionEncoder {
-    override fun compress(readChannel: ByteReadChannel) = readChannel.deflated(true)
-    override fun compress(writeChannel: ByteWriteChannel) = writeChannel.deflated(true)
+    override fun compress(readChannel: ByteReadChannel, coroutineContext: CoroutineContext): ByteReadChannel =
+        readChannel.deflated(true, coroutineContext = coroutineContext)
+
+    override fun compress(writeChannel: ByteWriteChannel, coroutineContext: CoroutineContext): ByteWriteChannel =
+        writeChannel.deflated(true, coroutineContext = coroutineContext)
 }
 
 /**
  * Implementation of the deflate encoder
  */
 object DeflateEncoder : CompressionEncoder {
-    override fun compress(readChannel: ByteReadChannel) = readChannel.deflated(false)
-    override fun compress(writeChannel: ByteWriteChannel) = writeChannel.deflated(false)
+    override fun compress(readChannel: ByteReadChannel, coroutineContext: CoroutineContext): ByteReadChannel =
+        readChannel.deflated(false, coroutineContext = coroutineContext)
+
+    override fun compress(writeChannel: ByteWriteChannel, coroutineContext: CoroutineContext): ByteWriteChannel =
+        writeChannel.deflated(false, coroutineContext = coroutineContext)
 }
 
 /**
  *  Implementation of the identity encoder
  */
 object IdentityEncoder : CompressionEncoder {
-    override fun compress(readChannel: ByteReadChannel) = readChannel
-    override fun compress(writeChannel: ByteWriteChannel) = writeChannel
+    override fun compress(
+        readChannel: ByteReadChannel,
+        coroutineContext: CoroutineContext
+    ): ByteReadChannel = readChannel
+
+    override fun compress(
+        writeChannel: ByteWriteChannel,
+        coroutineContext: CoroutineContext
+    ): ByteWriteChannel = writeChannel
 }
 
 /**
  * Represents a builder for conditions
  */
 interface ConditionsHolderBuilder {
+    /**
+     * Preconditions applied to every response object to check if it should be compressed
+     */
     val conditions: MutableList<ApplicationCall.(OutgoingContent) -> Boolean>
 }
 
 /**
  * Builder for compression encoder configuration
+ * @property name of encoder
+ * @property encoder instance
  */
-class CompressionEncoderBuilder internal constructor(val name: String, val encoder: CompressionEncoder) : ConditionsHolderBuilder {
+class CompressionEncoderBuilder internal constructor(
+    val name: String, val encoder: CompressionEncoder
+) : ConditionsHolderBuilder {
     /**
      * List of conditions for this encoder
      */
@@ -306,7 +354,7 @@ fun ConditionsHolderBuilder.condition(predicate: ApplicationCall.(OutgoingConten
  * Appends a minimum size condition to the encoder or Compression configuration
  */
 fun ConditionsHolderBuilder.minimumSize(minSize: Long) {
-    condition { it.contentLength?.let { it >= minSize } ?: true }
+    condition { content -> content.contentLength?.let { it >= minSize } ?: true }
 }
 
 /**

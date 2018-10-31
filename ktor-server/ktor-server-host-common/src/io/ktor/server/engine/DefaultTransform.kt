@@ -1,19 +1,24 @@
 package io.ktor.server.engine
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.util.cio.*
+import io.ktor.http.content.*
 import io.ktor.http.*
 import io.ktor.http.cio.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.request.*
 import io.ktor.response.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
-import kotlinx.coroutines.experimental.io.jvm.javaio.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
+import kotlinx.coroutines.io.jvm.javaio.*
 import kotlinx.io.streams.*
 import java.io.*
 import java.nio.charset.*
 
+/**
+ * Default send transformation
+ */
+@EngineAPI
 fun ApplicationSendPipeline.installDefaultTransformations() {
     intercept(ApplicationSendPipeline.Render) { value ->
         val transformed = transformDefaultContent(value)
@@ -22,11 +27,16 @@ fun ApplicationSendPipeline.installDefaultTransformations() {
     }
 }
 
+/**
+ * Default receive transformation
+ */
+@EngineAPI
 fun ApplicationReceivePipeline.installDefaultTransformations() {
     intercept(ApplicationReceivePipeline.Transform) { query ->
         val channel = query.value as? ByteReadChannel ?: return@intercept
         val transformed: Any? = when (query.type) {
             ByteReadChannel::class -> channel
+            ByteArray::class -> channel.toByteArray()
             InputStream::class -> channel.toInputStream()
             MultiPartData::class -> multiPartData(channel)
             String::class -> channel.readText(charset = call.request.contentCharset() ?: Charsets.ISO_8859_1)
@@ -61,12 +71,11 @@ fun ApplicationReceivePipeline.installDefaultTransformations() {
 }
 
 private fun PipelineContext<*, ApplicationCall>.multiPartData(rc: ByteReadChannel): MultiPartData {
-    val contentType = call.request.header(HttpHeaders.ContentType) ?:
-            throw IllegalStateException("Content-Type header is required for multipart processing")
+    val contentType = call.request.header(HttpHeaders.ContentType)
+            ?: throw IllegalStateException("Content-Type header is required for multipart processing")
 
     val contentLength = call.request.header(HttpHeaders.ContentLength)?.toLong()
-
-    return CIOMultipartDataBase(Unconfined, rc, contentType, contentLength)
+    return CIOMultipartDataBase(coroutineContext + Dispatchers.Unconfined, rc, contentType, contentLength)
 }
 
 private suspend fun ByteReadChannel.readText(
@@ -74,7 +83,7 @@ private suspend fun ByteReadChannel.readText(
 ): String {
     if (isClosedForRead) return ""
 
-    val content = readRemaining()
+    val content = readRemaining(Long.MAX_VALUE)
 
     return try {
         if (charset == Charsets.UTF_8) content.readText()

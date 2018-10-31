@@ -10,108 +10,271 @@ import io.ktor.application.*
 import io.ktor.auth.*
 import io.ktor.request.*
 import io.ktor.response.*
+import org.slf4j.*
 import java.security.interfaces.*
 import java.util.*
 
 private val JWTAuthKey: Any = "JWTAuth"
 
+private val JWTLogger: Logger = LoggerFactory.getLogger("io.ktor.auth.jwt")
+
+/**
+ * Represents a JWT credential consist of the specified [payload]
+ * @param payload JWT
+ * @see Payload
+ */
 class JWTCredential(val payload: Payload) : Credential
+
+/**
+ * Represents a JWT principal consist of the specified [payload]
+ * @param payload JWT
+ * @see Payload
+ */
 class JWTPrincipal(val payload: Payload) : Principal
 
 /**
- * Add JWT token authentication to the pipeline using a [JWTVerifier] to verify the token integrity.
- * @param [jwtVerifier] verifies token format and signature
- * @param [realm] used in the WWW-Authenticate response header
- * @param [validate] verify the credentials provided by the client token
+ * JWT authentication provider that will be registered with the specified [name]
  */
-fun AuthenticationPipeline.jwtAuthentication(jwtVerifier: JWTVerifier, realm: String, validate: (JWTCredential) -> Principal?) {
-    intercept(AuthenticationPipeline.RequestAuthentication) { context ->
-        val token = call.request.parseAuthorizationHeaderOrNull()
-        val principal = verifyAndValidate(jwtVerifier, token, validate)
-        evaluate(token, principal, realm, context)
+class JWTAuthenticationProvider(name: String?) : AuthenticationProvider(name) {
+    internal var authenticationFunction: suspend ApplicationCall.(JWTCredential) -> Principal? = { null }
+
+    internal var schemes = JWTAuthSchemes("Bearer")
+    internal var verifier: ((HttpAuthHeader) -> JWTVerifier?) = { null }
+
+    /**
+     * JWT realm name that will be used during auth challenge
+     */
+    var realm: String = "Ktor Server"
+
+    /**
+     * @param [defaultScheme] default scheme that will be used to challenge the client when no valid auth is provided
+     * @param [additionalSchemes] additional schemes that will be accepted when validating the authentication
+     */
+    fun authSchemes(defaultScheme: String = "Bearer", vararg additionalSchemes: String) {
+        schemes = JWTAuthSchemes(defaultScheme, *additionalSchemes)
     }
+
+    /**
+     * @param [verifier] verifies token format and signature
+     */
+    fun verifier(verifier: JWTVerifier) {
+        this.verifier = { verifier }
+    }
+
+    /**
+     * @param [verifier] verifies token format and signature
+     */
+    fun verifier(verifier: (HttpAuthHeader) -> JWTVerifier?) {
+        this.verifier = verifier
+    }
+
+    /**
+     * @param [jwkProvider] provides the JSON Web Key
+     * @param [issuer] the issuer of the JSON Web Token
+     */
+    fun verifier(jwkProvider: JwkProvider, issuer: String) {
+        this.verifier = { token -> getVerifier(jwkProvider, issuer, token, schemes) }
+    }
+
+    /**
+     * @param [jwkProvider] provides the JSON Web Key
+     */
+    fun verifier(jwkProvider: JwkProvider) {
+        this.verifier = { token -> getVerifier(jwkProvider, token, schemes) }
+    }
+
+    /**
+     * Apply [validate] function to every call with [JWTCredential]
+     * @return a principal (usually an instance of [JWTPrincipal]) or `null`
+     */
+    fun validate(validate: suspend ApplicationCall.(JWTCredential) -> Principal?) {
+        authenticationFunction = validate
+    }
+}
+
+internal class JWTAuthSchemes(val defaultScheme: String, vararg additionalSchemes: String) {
+    val schemes = (arrayOf(defaultScheme) + additionalSchemes).toSet()
+    val schemesLowerCase = schemes.map { it.toLowerCase() }.toSet()
+
+    operator fun contains(scheme: String): Boolean = scheme.toLowerCase() in schemesLowerCase
 }
 
 /**
- * Add JWT token authentication to the pipeline using a [JwkProvider] to verify the token integrity.
- * @param [jwkProvider] provides the JSON Web Key
- * @param [issuer] the issuer of the JSON Web Token
- * @param [realm] used in the WWW-Authenticate response header
+ * Installs JWT Authentication mechanism
  */
-fun AuthenticationPipeline.jwtAuthentication(jwkProvider: JwkProvider, issuer: String, realm: String, validate: (JWTCredential) -> Principal?) {
-    intercept(AuthenticationPipeline.RequestAuthentication) { context ->
+fun Authentication.Configuration.jwt(name: String? = null, configure: JWTAuthenticationProvider.() -> Unit) {
+    val provider = JWTAuthenticationProvider(name).apply(configure)
+    val realm = provider.realm
+    val authenticate = provider.authenticationFunction
+    val verifier = provider.verifier
+    val schemes = provider.schemes
+    provider.pipeline.intercept(AuthenticationPipeline.RequestAuthentication) { context ->
         val token = call.request.parseAuthorizationHeaderOrNull()
-        val verifier = getVerifier(jwkProvider, issuer, token)
-        val principal = verifyAndValidate(verifier, token, validate)
-        evaluate(token, principal, realm, context)
-    }
-}
+        if (token == null) {
+            context.bearerChallenge(AuthenticationFailedCause.NoCredentials, realm, schemes)
+            return@intercept
+        }
 
-private suspend fun evaluate(token: HttpAuthHeader?, principal: Principal?, realm: String, context: AuthenticationContext) {
-    val cause = when {
-        token == null -> AuthenticationFailedCause.NoCredentials
-        principal == null -> AuthenticationFailedCause.InvalidCredentials
-        else -> null
-    }
-    if (cause != null) {
-        context.challenge(JWTAuthKey, cause) {
-            call.respond(UnauthorizedResponse(HttpAuthHeader.bearerAuthChallenge(realm)))
-            it.complete()
+        try {
+            val principal = verifyAndValidate(call, verifier(token), token, schemes, authenticate)
+            if (principal != null) {
+                context.principal(principal)
+            } else {
+                context.bearerChallenge(AuthenticationFailedCause.InvalidCredentials, realm, schemes)
+            }
+        } catch (cause: Throwable) {
+            val message = cause.message ?: cause.javaClass.simpleName
+            JWTLogger.trace("JWT verification failed: {}", message)
+            context.error(JWTAuthKey, AuthenticationFailedCause.Error(message))
         }
     }
-    if (principal != null) {
-        context.principal(principal)
+    register(provider)
+}
+
+private fun AuthenticationContext.bearerChallenge(
+    cause: AuthenticationFailedCause,
+    realm: String,
+    schemes: JWTAuthSchemes
+) = challenge(JWTAuthKey, cause) {
+    call.respond(UnauthorizedResponse(HttpAuthHeader.bearerAuthChallenge(realm, schemes)))
+    it.complete()
+}
+
+private fun getVerifierNullableIssuer(
+    jwkProvider: JwkProvider,
+    issuer: String?,
+    token: HttpAuthHeader,
+    schemes: JWTAuthSchemes
+): JWTVerifier? {
+    val jwk = token.getBlob(schemes)?.let { blob ->
+        try {
+            jwkProvider.get(JWT.decode(blob).keyId)
+        } catch (ex: JwkException) {
+            JWTLogger.trace("Failed to get JWK: {}", ex.message)
+            null
+        } catch (ex: JWTDecodeException) {
+            JWTLogger.trace("Illegal JWT: {}", ex.message)
+            null
+        }
+    } ?: return null
+
+    val algorithm = try {
+        jwk.makeAlgorithm()
+    } catch (cause: Throwable) {
+        JWTLogger.trace("Failed to create algorithm {}: {}", jwk.algorithm, cause.message ?: cause.javaClass.simpleName)
+        return null
+    }
+
+    return when (issuer) {
+        null -> JWT.require(algorithm).build()
+        else -> JWT.require(algorithm).withIssuer(issuer).build()
     }
 }
 
-private fun getVerifier(jwkProvider: JwkProvider, issuer: String, token: HttpAuthHeader?): JWTVerifier? {
-    val jwk = token.getBlob()?.let { jwkProvider.get(JWT.decode(it).keyId) }
-
-    val algorithm = try {
-        jwk?.makeAlgorithm()
-    } catch (ex: IllegalArgumentException) {
-        null
-    } ?: return null
-    return JWT.require(algorithm).withIssuer(issuer).build()
+private fun getVerifier(
+    jwkProvider: JwkProvider,
+    issuer: String,
+    token: HttpAuthHeader,
+    schemes: JWTAuthSchemes
+): JWTVerifier? {
+    return getVerifierNullableIssuer(jwkProvider, issuer, token, schemes)
 }
 
-private fun verifyAndValidate(jwtVerifier: JWTVerifier?, token: HttpAuthHeader?, validate: (JWTCredential) -> Principal?): Principal? {
+private fun getVerifier(jwkProvider: JwkProvider, token: HttpAuthHeader, schemes: JWTAuthSchemes): JWTVerifier? {
+    return getVerifierNullableIssuer(jwkProvider, null, token, schemes)
+}
+
+private suspend fun verifyAndValidate(
+    call: ApplicationCall,
+    jwtVerifier: JWTVerifier?,
+    token: HttpAuthHeader,
+    schemes: JWTAuthSchemes,
+    validate: suspend ApplicationCall.(JWTCredential) -> Principal?
+): Principal? {
     val jwt = try {
-        token.getBlob()?.let { jwtVerifier?.verify(it) }
+        token.getBlob(schemes)?.let { jwtVerifier?.verify(it) }
     } catch (ex: JWTVerificationException) {
+        JWTLogger.trace("Token verification failed: {}", ex.message)
         null
     } ?: return null
 
     val payload = jwt.parsePayload()
-    val credentials = payload.let(::JWTCredential)
-    return credentials.let(validate)
+    val credentials = JWTCredential(payload)
+    return validate(call, credentials)
 }
 
-private fun HttpAuthHeader?.getBlob() = when {
-    this is HttpAuthHeader.Single && authScheme == "Bearer" -> blob
+private fun HttpAuthHeader.getBlob(schemes: JWTAuthSchemes) = when {
+    this is HttpAuthHeader.Single && authScheme.toLowerCase() in schemes -> blob
     else -> null
 }
 
 private fun ApplicationRequest.parseAuthorizationHeaderOrNull() = try {
     parseAuthorizationHeader()
 } catch (ex: IllegalArgumentException) {
+    JWTLogger.trace("Illegal HTTP auth header", ex)
     null
 }
 
-private fun HttpAuthHeader.Companion.bearerAuthChallenge(realm: String): HttpAuthHeader =
-        HttpAuthHeader.Parameterized("Bearer", mapOf(HttpAuthHeader.Parameters.Realm to realm))
+private fun HttpAuthHeader.Companion.bearerAuthChallenge(realm: String, schemes: JWTAuthSchemes): HttpAuthHeader =
+    HttpAuthHeader.Parameterized(schemes.defaultScheme, mapOf(HttpAuthHeader.Parameters.Realm to realm))
 
-private fun Jwk.makeAlgorithm(): Algorithm = when (algorithm) {
+internal fun Jwk.makeAlgorithm(): Algorithm = when (algorithm) {
     "RS256" -> Algorithm.RSA256(publicKey as RSAPublicKey, null)
     "RS384" -> Algorithm.RSA384(publicKey as RSAPublicKey, null)
     "RS512" -> Algorithm.RSA512(publicKey as RSAPublicKey, null)
     "ES256" -> Algorithm.ECDSA256(publicKey as ECPublicKey, null)
     "ES384" -> Algorithm.ECDSA384(publicKey as ECPublicKey, null)
     "ES512" -> Algorithm.ECDSA512(publicKey as ECPublicKey, null)
+    null -> Algorithm.RSA256(publicKey as RSAPublicKey, null)
     else -> throw IllegalArgumentException("Unsupported algorithm $algorithm")
 }
 
 private fun DecodedJWT.parsePayload(): Payload {
     val payloadString = String(Base64.getUrlDecoder().decode(payload))
     return JWTParser().parsePayload(payloadString)
+}
+
+@Suppress("KDocMissingDocumentation")
+@Deprecated(
+    "Use DSL builder form", replaceWith = ReplaceWith(
+        "jwt {\n" +
+            "        this.realm = realm\n" +
+            "        this.verifier(jwtVerifier)\n" +
+            "        this.validate(validate)\n" +
+            "    }\n"
+    ), level = DeprecationLevel.ERROR
+)
+fun Authentication.Configuration.jwtAuthentication(
+    jwtVerifier: JWTVerifier,
+    realm: String,
+    validate: suspend (JWTCredential) -> Principal?
+) {
+    jwt {
+        this.realm = realm
+        this.verifier(jwtVerifier)
+        this.validate { validate(it) }
+    }
+}
+
+@Suppress("KDocMissingDocumentation")
+@Deprecated(
+    "Use DSL builder form", replaceWith = ReplaceWith(
+        "jwt {\n" +
+            "        this.realm = realm\n" +
+            "        this.verifier(jwkProvider, issuer)\n" +
+            "        this.validate(validate)\n" +
+            "    }\n"
+    ), level = DeprecationLevel.ERROR
+)
+fun Authentication.Configuration.jwtAuthentication(
+    jwkProvider: JwkProvider,
+    issuer: String,
+    realm: String,
+    validate: suspend (JWTCredential) -> Principal?
+) {
+    jwt {
+        this.realm = realm
+        this.verifier(jwkProvider, issuer)
+        this.validate { validate(it) }
+    }
 }

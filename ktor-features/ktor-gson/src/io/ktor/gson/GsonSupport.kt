@@ -2,15 +2,15 @@ package io.ktor.gson
 
 import com.google.gson.*
 import io.ktor.application.*
-import io.ktor.content.*
 import io.ktor.features.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.http.content.*
+import io.ktor.util.pipeline.*
 import io.ktor.request.*
 import io.ktor.response.*
 import io.ktor.util.*
-import kotlinx.coroutines.experimental.io.*
-import kotlinx.coroutines.experimental.io.jvm.javaio.*
+import kotlinx.coroutines.io.*
+import kotlinx.coroutines.io.jvm.javaio.*
 
 /**
  *    install(ContentNegotiation) {
@@ -28,8 +28,12 @@ import kotlinx.coroutines.experimental.io.jvm.javaio.*
  *        }
  *    }
  */
-@Deprecated("GsonSupport is deprecated in favor of generic ContentNegotiation Feature")
-class GsonSupport(val gson: Gson) {
+@Suppress("DEPRECATION_ERROR", "KDocMissingDocumentation")
+@Deprecated(
+    "GsonSupport is deprecated in favor of generic ContentNegotiation Feature",
+    level = DeprecationLevel.ERROR
+)
+class GsonSupport(private val gson: Gson) {
     @Suppress("DEPRECATION")
     companion object Feature : ApplicationFeature<ApplicationCallPipeline, GsonBuilder, GsonSupport> {
         override val key = AttributeKey<GsonSupport>("gson")
@@ -67,7 +71,9 @@ class GsonSupport(val gson: Gson) {
     }
 }
 
-
+/**
+ * GSON converter for [ContentNegotiation] feature
+ */
 class GsonConverter(private val gson: Gson = Gson()) : ContentConverter {
     override suspend fun convertForSend(context: PipelineContext<Any, ApplicationCall>, contentType: ContentType, value: Any): Any? {
         return TextContent(gson.toJson(value), contentType.withCharset(context.call.suitableCharset()))
@@ -82,9 +88,13 @@ class GsonConverter(private val gson: Gson = Gson()) : ContentConverter {
     }
 }
 
-fun ContentNegotiation.Configuration.gson(block: GsonBuilder.() -> Unit) {
+/**
+ * Register GSON to [ContentNegotiation] feature
+ */
+fun ContentNegotiation.Configuration.gson(contentType: ContentType = ContentType.Application.Json,
+                                          block: GsonBuilder.() -> Unit = {}) {
     val builder = GsonBuilder()
     builder.apply(block)
     val converter = GsonConverter(builder.create())
-    register(ContentType.Application.Json, converter)
+    register(contentType, converter)
 }

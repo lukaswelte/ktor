@@ -11,8 +11,8 @@ fun String.escapeHTML(): String {
         for (idx in 0 until text.length) {
             val ch = text[idx]
             when (ch) {
-                '\'' -> append("&apos;")
-                '\"' -> append("&quot")
+                '\'' -> append("&#x27;")
+                '\"' -> append("&quot;")
                 '&' -> append("&amp;")
                 '<' -> append("&lt;")
                 '>' -> append("&gt;")
@@ -35,3 +35,15 @@ inline fun String.chomp(separator: String, onMissingDelimiter: () -> Pair<String
     }
 }
 
+internal fun String.caseInsensitive(): CaseInsensitiveString = CaseInsensitiveString(this)
+
+internal class CaseInsensitiveString(val content: String) {
+    private val hash = content.toLowerCase().hashCode()
+
+    override fun equals(other: Any?): Boolean =
+        (other as? CaseInsensitiveString)?.content?.equals(content, ignoreCase = true) == true
+
+    override fun hashCode(): Int {
+        return hash
+    }
+}

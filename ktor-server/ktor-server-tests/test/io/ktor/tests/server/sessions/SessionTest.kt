@@ -14,8 +14,8 @@ import io.ktor.server.testing.handleRequest
 import io.ktor.server.testing.withTestApplication
 import io.ktor.sessions.*
 import io.ktor.util.hex
-import kotlinx.coroutines.experimental.io.jvm.javaio.toInputStream
-import kotlinx.coroutines.experimental.runBlocking
+import kotlinx.coroutines.io.jvm.javaio.*
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import java.time.Duration
 import java.util.*
@@ -84,11 +84,11 @@ class SessionTest {
                 assertNull(call.response.cookies[cookieName], "There should be no session set by default")
             }
 
-            var sessionParam: String = ""
+            var sessionParam: String
             handleRequest(HttpMethod.Get, "/1").let { call ->
                 val sessionCookie = call.response.cookies[cookieName]
                 assertNotNull(sessionCookie, "No session cookie found")
-                sessionParam = sessionCookie!!.value
+                sessionParam = sessionCookie.value
                 assertEquals("foo.bar", sessionCookie.domain)
                 assertEquals(3600, sessionCookie.maxAge)
 
@@ -96,7 +96,7 @@ class SessionTest {
             }
 
             handleRequest(HttpMethod.Get, "/2") {
-                addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(sessionParam)}")
+                addHeader(HttpHeaders.Cookie, "$cookieName=${sessionParam.encodeURLQueryComponent()}")
             }.let { call ->
                 assertEquals("ok, id1", call.response.content)
             }
@@ -122,15 +122,15 @@ class SessionTest {
                 }
             }
 
-            var sessionId = ""
+            var sessionId: String
             handleRequest(HttpMethod.Get, "/1").let { call ->
                 val sessionCookie = call.response.cookies[cookieName]
                 assertNotNull(sessionCookie, "No session cookie found")
-                sessionId = sessionCookie!!.value
+                sessionId = sessionCookie.value
             }
 
             handleRequest(HttpMethod.Get, "/2") {
-                addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(sessionId)}")
+                addHeader(HttpHeaders.Cookie, "$cookieName=${sessionId.encodeURLQueryComponent()}")
             }.let { call ->
                 assertEquals("ok, id2", call.response.content)
             }
@@ -143,7 +143,7 @@ class SessionTest {
 
             handleRequest(HttpMethod.Get, "/2") {
                 val brokenSession = flipLastHexDigit(sessionId)
-                addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(brokenSession)}")
+                addHeader(HttpHeaders.Cookie, "$cookieName=${brokenSession.encodeURLQueryComponent()}")
             }.let { call ->
                 assertEquals("ok, null", call.response.content)
             }
@@ -182,6 +182,9 @@ class SessionTest {
                     call.sessions.set(TestUserSession("id2", emptyList()))
                     call.respondText("ok")
                 }
+                get("/4") {
+                    call.respondText("ok:" + call.sessions.get<TestUserSession>()?.userId)
+                }
             }
 
             handleRequest(HttpMethod.Get, "/3").let { call ->
@@ -190,6 +193,18 @@ class SessionTest {
                     "00112233445566778899aabbccddeeff/c3850fc1ddc62f71ec5eaad6d393b91fa809fe32a1cf0cb4730788c5a489daef:51a5e9fcd1c91418f9a623bafa5022a524348e44244265dc0cab2cebacc28a5d",
                     sessionCookie!!.value
                 )
+            }
+
+            handleRequest(HttpMethod.Get, "/4") {
+                addHeader(HttpHeaders.Cookie, "$cookieName=INVALID")
+            }.let { call ->
+                assertEquals("ok:null", call.response.content)
+            }
+
+            handleRequest(HttpMethod.Get, "/4") {
+                addHeader(HttpHeaders.Cookie, "$cookieName=abc/abc:abc")
+            }.let { call ->
+                assertEquals("ok:null", call.response.content)
             }
 
             commonSignedChecks()
@@ -207,15 +222,15 @@ class SessionTest {
             }
         }
 
-        var sessionId = ""
+        var sessionId: String
         handleRequest(HttpMethod.Get, "/1").let { call ->
             val sessionCookie = call.response.cookies[cookieName]
             assertNotNull(sessionCookie, "No session cookie found")
-            sessionId = sessionCookie!!.value
+            sessionId = sessionCookie.value
         }
 
         handleRequest(HttpMethod.Get, "/2") {
-            addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(sessionId)}")
+            addHeader(HttpHeaders.Cookie, "$cookieName=${sessionId.encodeURLQueryComponent()}")
         }.let { call ->
             assertEquals("ok, id2", call.response.content)
         }
@@ -228,14 +243,14 @@ class SessionTest {
 
         handleRequest(HttpMethod.Get, "/2") {
             val brokenSession = flipLastHexDigit(sessionId)
-            addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(brokenSession)}")
+            addHeader(HttpHeaders.Cookie, "$cookieName=${brokenSession.encodeURLQueryComponent()}")
         }.let { call ->
             assertEquals("ok, null", call.response.content)
         }
 
         handleRequest(HttpMethod.Get, "/2") {
             val invalidHex = sessionId.mapIndexed { i, c -> if (i == sessionId.lastIndex) 'x' else c }.joinToString("")
-            addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(invalidHex)}")
+            addHeader(HttpHeaders.Cookie, "$cookieName=${invalidHex.encodeURLQueryComponent()}")
         }.let { call ->
             assertEquals("ok, null", call.response.content)
         }
@@ -281,17 +296,17 @@ class SessionTest {
                 assertEquals("No session", call.response.content)
             }
 
-            var sessionParam: String = ""
+            var sessionParam: String
             handleRequest(HttpMethod.Get, "/1").let { call ->
                 val sessionCookie = call.response.cookies[cookieName]
                 assertNotNull(sessionCookie, "No session cookie found")
-                sessionParam = sessionCookie!!.value
+                sessionParam = sessionCookie.value
 
                 assertEquals(TestUserSession("id1", emptyList()), autoSerializerOf<TestUserSession>().deserialize(sessionParam))
                 assertEquals("ok", call.response.content)
             }
             handleRequest(HttpMethod.Get, "/2") {
-                addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(sessionParam)}")
+                addHeader(HttpHeaders.Cookie, "$cookieName=${sessionParam.encodeURLQueryComponent()}")
             }.let { call ->
                 assertEquals("ok, id1", call.response.content)
             }
@@ -334,17 +349,17 @@ class SessionTest {
                 }
             }
 
-            var sessionParam: String = ""
+            var sessionParam: String
             handleRequest(HttpMethod.Get, "/a/1").let { call ->
                 val sessionCookie = call.response.cookies[cookieName]
                 assertNotNull(sessionCookie, "No session cookie found")
-                sessionParam = sessionCookie!!.value
+                sessionParam = sessionCookie.value
 
                 assertEquals(sessionA, autoSerializerOf<TestUserSession>().deserialize(sessionParam))
                 assertEquals("ok", call.response.content)
             }
             handleRequest(HttpMethod.Get, "/a/2") {
-                addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(sessionParam)}")
+                addHeader(HttpHeaders.Cookie, "$cookieName=${sessionParam.encodeURLQueryComponent()}")
             }.let { call ->
                 assertEquals("ok, id1", call.response.content)
             }
@@ -352,13 +367,13 @@ class SessionTest {
             handleRequest(HttpMethod.Get, "/b/1").let { call ->
                 val sessionCookie = call.response.cookies[cookieName]
                 assertNotNull(sessionCookie, "No session cookie found")
-                sessionParam = sessionCookie!!.value
+                sessionParam = sessionCookie.value
 
                 assertEquals(sessionB, autoSerializerOf<TestUserSessionB>().deserialize(sessionParam))
                 assertEquals("ok", call.response.content)
             }
             handleRequest(HttpMethod.Get, "/b/2") {
-                addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(sessionParam)}")
+                addHeader(HttpHeaders.Cookie, "$cookieName=${sessionParam.encodeURLQueryComponent()}")
             }.let { call ->
                 assertEquals("ok, id2", call.response.content)
             }
@@ -398,11 +413,11 @@ class SessionTest {
                 assertNull(response.response.cookies[cookieName], "It should be no session set by default")
             }
 
-            var sessionId = ""
+            var sessionId: String
             handleRequest(HttpMethod.Get, "/1").let { response ->
                 val sessionCookie = response.response.cookies[cookieName]
                 assertNotNull(sessionCookie, "No session id cookie found")
-                sessionId = sessionCookie!!.value
+                sessionId = sessionCookie.value
                 assertTrue { sessionId.matches("[A-Za-z0-9]+".toRegex()) }
             }
             val serializedSession = runBlocking {
@@ -445,17 +460,17 @@ class SessionTest {
                 }
             }
 
-            var sessionId = ""
+            var sessionId: String
             handleRequest(HttpMethod.Get, "/1").let { call ->
                 val sessionCookie = call.response.cookies[cookieName]
                 assertNotNull(sessionCookie, "No session cookie found")
-                sessionId = sessionCookie!!.value
+                sessionId = sessionCookie.value
             }
 
             assertEquals("666/c2d4eaad4fe0bc6dbd0584cdf36929d79d52d7a748d1cc02835a71131a0963fb", sessionId)
 
             handleRequest(HttpMethod.Get, "/2") {
-                addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(sessionId)}")
+                addHeader(HttpHeaders.Cookie, "$cookieName=${sessionId.encodeURLQueryComponent()}")
             }.let { call ->
                 assertEquals("ok, id2", call.response.content)
             }
@@ -468,7 +483,7 @@ class SessionTest {
 
             handleRequest(HttpMethod.Get, "/2") {
                 val brokenSession = flipLastHexDigit(sessionId)
-                addHeader(HttpHeaders.Cookie, "$cookieName=${encodeURLQueryComponent(brokenSession)}")
+                addHeader(HttpHeaders.Cookie, "$cookieName=${brokenSession.encodeURLQueryComponent()}")
             }.let { call ->
                 assertEquals("ok, null", call.response.content)
             }
@@ -503,11 +518,11 @@ class SessionTest {
                 }
             }
 
-            var sessionId = ""
+            var sessionId: String
             handleRequest(HttpMethod.Get, "/1").let { call ->
                 val header = call.response.headers[cookieName]
                 assertNotNull(header, "No session cookie found")
-                sessionId = header!!
+                sessionId = header
             }
 
             handleRequest(HttpMethod.Get, "/2") {

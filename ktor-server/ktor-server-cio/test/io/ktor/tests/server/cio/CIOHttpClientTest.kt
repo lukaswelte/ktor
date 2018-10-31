@@ -5,8 +5,10 @@ import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import io.ktor.client.response.*
+import io.ktor.client.utils.*
 import io.ktor.http.*
-import kotlinx.coroutines.experimental.*
+import io.ktor.http.content.*
+import kotlinx.coroutines.*
 import org.junit.Test
 import java.io.*
 import java.net.*
@@ -151,8 +153,12 @@ class CIOHttpClientTest {
             method = HttpMethod.Post
             url.encodedPath = "/url"
             header("header", "value")
-            header("Transfer-Encoding", "chunked")
-            body = "request-body"
+            body = TextContent("request-body", ContentType.Text.Plain).wrapHeaders { hh ->
+                HeadersBuilder().apply {
+                    appendAll(hh)
+                    append(HttpHeaders.TransferEncoding, "chunked")
+                }.build()
+            }
         }.response
 
         try {

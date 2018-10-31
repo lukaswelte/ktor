@@ -1,7 +1,6 @@
 package io.ktor.client.tests
 
 import io.ktor.application.*
-import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.*
 import io.ktor.client.request.*
@@ -13,80 +12,95 @@ import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.engine.*
 import io.ktor.server.jetty.*
-import kotlinx.coroutines.experimental.*
-import org.junit.*
-import org.junit.Assert.*
+import io.ktor.server.netty.*
+import io.ktor.util.*
+import kotlin.test.*
 
 
 abstract class FullFormTest(private val factory: HttpClientEngineFactory<*>) : TestWithKtor() {
     override val server = embeddedServer(Jetty, serverPort) {
         routing {
             get("/hello") {
-                assertEquals("Hello, server", call.receive<String>())
+                assertEquals("Hello, server", call.receive())
                 call.respondText("Hello, client")
             }
             post("/hello") {
-                assertEquals("Hello, server", call.receive<String>())
+                assertEquals("Hello, server", call.receive())
                 call.respondText("Hello, client")
             }
+            get("/custom") {
+                call.respond(HttpStatusCode(200, "Custom"), "OK")
+            }
+        }
+    }
+
+    @Test
+    fun testGet() = clientTest(factory) {
+        test { client ->
+            val text = client.call {
+                url {
+                    protocol = URLProtocol.HTTP
+                    host = "127.0.0.1"
+                    port = serverPort
+                    encodedPath = "/hello"
+                    method = HttpMethod.Get
+                    body = "Hello, server"
+                }
+            }.use { it.response.readText() }
+
+            assertEquals("Hello, client", text)
         }
     }
 
     @Test
-    fun testGet() = runBlocking {
-        val client = HttpClient(factory)
-        val text = client.call {
-            url {
-                protocol = URLProtocol.HTTP
-                host = "127.0.0.1"
-                port = serverPort
-                encodedPath = "/hello"
-                method = HttpMethod.Get
-                body = "Hello, server"
-            }
-        }.use { it.response.readText() }
+    fun testPost() = clientTest(factory) {
+        test { client ->
+            val text = client.call {
+                url {
+                    protocol = URLProtocol.HTTP
+                    host = "127.0.0.1"
+                    port = serverPort
+                    encodedPath = "/hello"
+                    method = HttpMethod.Post
+                    body = "Hello, server"
+                }
+            }.use { it.response.readText() }
 
-        assertEquals("Hello, client", text)
-
-        client.close()
+            assertEquals("Hello, client", text)
+        }
     }
 
     @Test
-    fun testPost() = runBlocking {
-        val client = HttpClient(factory)
-        val text = client.call {
-            url {
-                protocol = URLProtocol.HTTP
-                host = "127.0.0.1"
-                port = serverPort
-                encodedPath = "/hello"
-                method = HttpMethod.Post
-                body = "Hello, server"
+    fun testRequest() = clientTest(factory) {
+        test { client ->
+            val requestBuilder = request {
+                url {
+                    host = "localhost"
+                    protocol = URLProtocol.HTTP
+                    port = serverPort
+                    encodedPath = "/hello"
+                    method = HttpMethod.Get
+                    body = "Hello, server"
+                }
             }
-        }.use { it.response.readText() }
 
-        assertEquals("Hello, client", text)
-        client.close()
+            val body = client.request<String>(requestBuilder)
+            assertEquals("Hello, client", body)
+        }
     }
 
     @Test
-    fun testRequest() {
-        val client = HttpClient(factory)
+    fun testCustomUrls() = clientTest(factory) {
+        val urls = listOf(
+            "https://google.com",
+            "http://kotlinlang.org/",
+            "https://kotlinlang.org/"
+        )
 
-        val requestBuilder = request {
-            url {
-                host = "localhost"
-                protocol = URLProtocol.HTTP
-                port = serverPort
-                encodedPath = "/hello"
-                method = HttpMethod.Get
-                body = "Hello, server"
+        test { client ->
+            urls.forEach {
+                client.get<String>(it)
             }
         }
-
-        val body = runBlocking { client.request<String>(requestBuilder) }
-        assertEquals("Hello, client", body)
-
-        client.close()
     }
 }

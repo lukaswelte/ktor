@@ -1,24 +1,24 @@
 package io.ktor.network.sockets
 
 import io.ktor.network.selector.*
-import io.ktor.network.util.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
-import kotlinx.coroutines.experimental.io.ByteChannel
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
+import kotlinx.coroutines.io.ByteChannel
+import kotlinx.io.core.*
 import kotlinx.io.pool.*
+import java.nio.*
 import java.nio.channels.*
 
-internal fun attachForWritingImpl(
-        channel: ByteChannel,
-        nioChannel: WritableByteChannel,
-        selectable: Selectable,
-        selector: SelectorManager,
-        pool: ObjectPool<ByteBuffer>,
-        parent: Job
+internal fun CoroutineScope.attachForWritingImpl(
+    channel: ByteChannel,
+    nioChannel: WritableByteChannel,
+    selectable: Selectable,
+    selector: SelectorManager,
+    pool: ObjectPool<ByteBuffer>
 ): ReaderJob {
     val buffer = pool.borrow()
 
-    return reader(ioCoroutineDispatcher, channel, parent) {
+    return reader(Dispatchers.Unconfined, channel) {
         try {
             while (true) {
                 buffer.clear()
@@ -49,14 +49,14 @@ internal fun attachForWritingImpl(
     }
 }
 
-internal fun attachForWritingDirectImpl(
-        channel: ByteChannel,
-        nioChannel: WritableByteChannel,
-        selectable: Selectable,
-        selector: SelectorManager,
-        parent: Job
+@UseExperimental(ExperimentalIoApi::class)
+internal fun CoroutineScope.attachForWritingDirectImpl(
+    channel: ByteChannel,
+    nioChannel: WritableByteChannel,
+    selectable: Selectable,
+    selector: SelectorManager
 ): ReaderJob {
-    return reader(ioCoroutineDispatcher, channel, parent) {
+    return reader(Dispatchers.Unconfined, channel) {
         selectable.interestOp(SelectInterest.WRITE, false)
         try {
             channel.lookAheadSuspend {

@@ -4,11 +4,14 @@ import io.ktor.application.*
 import io.ktor.http.*
 import io.ktor.request.*
 import io.ktor.server.engine.*
-import io.ktor.util.*
 import javax.servlet.http.*
 
-abstract class ServletApplicationRequest(call: ApplicationCall,
-                                val servletRequest: HttpServletRequest) : BaseApplicationRequest(call) {
+@Suppress("KDocMissingDocumentation")
+@EngineAPI
+abstract class ServletApplicationRequest(
+    call: ApplicationCall,
+    val servletRequest: HttpServletRequest
+) : BaseApplicationRequest(call) {
 
     override val local: RequestConnectionPoint = ServletConnectionPoint(servletRequest)
 

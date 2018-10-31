@@ -14,16 +14,20 @@ import io.netty.util.concurrent.*
 import java.nio.channels.*
 import java.security.*
 import java.security.cert.*
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 
-internal class NettyChannelInitializer(private val enginePipeline: EnginePipeline,
-                                       private val environment: ApplicationEngineEnvironment,
-                                       private val callEventGroup: EventExecutorGroup,
-                                       private val engineContext: CoroutineContext,
-                                       private val userContext: CoroutineContext,
-                                       private val connector: EngineConnectorConfig,
-                                       private val requestQueueLimit: Int,
-                                       private val responseWriteTimeout: Int) : ChannelInitializer<SocketChannel>() {
+internal class NettyChannelInitializer(
+    private val enginePipeline: EnginePipeline,
+    private val environment: ApplicationEngineEnvironment,
+    private val callEventGroup: EventExecutorGroup,
+    private val engineContext: CoroutineContext,
+    private val userContext: CoroutineContext,
+    private val connector: EngineConnectorConfig,
+    private val requestQueueLimit: Int,
+    private val runningLimit: Int,
+    private val responseWriteTimeout: Int,
+    private val httpServerCodec: () -> HttpServerCodec
+) : ChannelInitializer<SocketChannel>() {
     private var sslContext: SslContext? = null
 
     init {
@@ -41,21 +45,22 @@ internal class NettyChannelInitializer(private val enginePipeline: EnginePipelin
             val pk = connector.keyStore.getKey(connector.keyAlias, password) as PrivateKey
             password.fill('\u0000')
 
-            sslContext = SslContextBuilder.forServer(pk, *certs)
-                    .apply {
-                        if (alpnProvider != null) {
-                            sslProvider(alpnProvider)
-                            ciphers(Http2SecurityUtil.CIPHERS, SupportedCipherSuiteFilter.INSTANCE)
-                            applicationProtocolConfig(ApplicationProtocolConfig(
-                                    ApplicationProtocolConfig.Protocol.ALPN,
-                                    ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
-                                    ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                                    ApplicationProtocolNames.HTTP_2,
-                                    ApplicationProtocolNames.HTTP_1_1
-                            ))
-                        }
-                    }
-                    .build()
+            sslContext = SslContextBuilder.forServer(pk, *certs).apply {
+                if (alpnProvider != null) {
+                    sslProvider(alpnProvider)
+                    ciphers(Http2SecurityUtil.CIPHERS, SupportedCipherSuiteFilter.INSTANCE)
+                    applicationProtocolConfig(
+                        ApplicationProtocolConfig(
+                            ApplicationProtocolConfig.Protocol.ALPN,
+                            ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                            ApplicationProtocolNames.HTTP_2,
+                            ApplicationProtocolNames.HTTP_1_1
+                        )
+                    )
+                }
+            }
+                .build()
         }
     }
 
@@ -76,19 +81,26 @@ internal class NettyChannelInitializer(private val enginePipeline: EnginePipelin
     }
 
     fun configurePipeline(pipeline: ChannelPipeline, protocol: String) {
-
         when (protocol) {
             ApplicationProtocolNames.HTTP_2 -> {
                 val handler = NettyHttp2Handler(enginePipeline, environment.application, callEventGroup, userContext)
                 pipeline.addLast(Http2MultiplexCodecBuilder.forServer(handler).build())
             }
             ApplicationProtocolNames.HTTP_1_1 -> {
-                val requestQueue = NettyRequestQueue(requestQueueLimit)
-                val handler = NettyHttp1Handler(enginePipeline, environment, callEventGroup, engineContext, userContext, requestQueue)
+                val requestQueue = NettyRequestQueue(requestQueueLimit, runningLimit)
+                val handler = NettyHttp1Handler(
+                    enginePipeline,
+                    environment,
+                    callEventGroup,
+                    engineContext,
+                    userContext,
+                    requestQueue
+                )
 
                 with(pipeline) {
-//                    addLast(LoggingHandler(LogLevel.WARN))
-                    addLast("codec", HttpServerCodec())
+                    //                    addLast(LoggingHandler(LogLevel.WARN))
+                    addLast("codec", httpServerCodec())
+                    addLast("continue", HttpServerExpectContinueHandler())
                     addLast("timeout", WriteTimeoutHandler(responseWriteTimeout))
                     addLast("http1", handler)
 
@@ -103,8 +115,10 @@ internal class NettyChannelInitializer(private val enginePipeline: EnginePipelin
         }
     }
 
-    inner class NegotiatedPipelineInitializer : ApplicationProtocolNegotiationHandler(ApplicationProtocolNames.HTTP_1_1) {
-        override fun configurePipeline(ctx: ChannelHandlerContext, protocol: String) = configurePipeline(ctx.pipeline(), protocol)
+    inner class NegotiatedPipelineInitializer :
+        ApplicationProtocolNegotiationHandler(ApplicationProtocolNames.HTTP_1_1) {
+        override fun configurePipeline(ctx: ChannelHandlerContext, protocol: String) =
+            configurePipeline(ctx.pipeline(), protocol)
 
         override fun handshakeFailure(ctx: ChannelHandlerContext, cause: Throwable?) {
             if (cause is ClosedChannelException) {

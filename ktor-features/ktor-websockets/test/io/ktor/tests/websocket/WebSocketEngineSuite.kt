@@ -2,12 +2,17 @@ package io.ktor.tests.websocket
 
 import io.ktor.application.*
 import io.ktor.http.*
+import io.ktor.http.cio.websocket.*
+import io.ktor.http.cio.websocket.CloseReason
+import io.ktor.http.cio.websocket.Frame
+import io.ktor.http.cio.websocket.FrameType
 import io.ktor.routing.*
 import io.ktor.server.engine.*
 import io.ktor.server.testing.*
 import io.ktor.util.*
 import io.ktor.websocket.*
-import kotlinx.coroutines.experimental.channels.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
 import org.junit.*
 import org.junit.Test
 import org.junit.rules.*
@@ -19,6 +24,7 @@ import java.util.*
 import java.util.concurrent.*
 import kotlin.test.*
 
+@UseExperimental(WebSocketInternalAPI::class, ObsoleteCoroutinesApi::class)
 abstract class WebSocketEngineSuite<TEngine : ApplicationEngine, TConfiguration : ApplicationEngine.Configuration>(hostFactory: ApplicationEngineFactory<TEngine, TConfiguration>) : EngineTestBase<TEngine, TConfiguration>(hostFactory) {
     @get:Rule
     val errors = ErrorCollector()
@@ -156,7 +162,7 @@ abstract class WebSocketEngineSuite<TEngine : ApplicationEngine, TConfiguration 
     @Test
     fun testReceiveMessages() {
         val count = 125
-        val template = (1..count).map { (it and 0x0f).toString(16) }.joinToString("")
+        val template = (1..count).joinToString("") { (it and 0x0f).toString(16) }
         val bytes = template.toByteArray()
 
         val collected = LinkedBlockingQueue<String>()
@@ -413,6 +419,7 @@ abstract class WebSocketEngineSuite<TEngine : ApplicationEngine, TConfiguration 
             outputStream.apply {
                 for (i in 1L..expectedCount) {
                     sendBuffer.clear()
+
                     Serializer().apply {
                         enqueue(Frame.Text(true, ByteBuffer.wrap(i.toString().toByteArray())))
                         serialize(sendBuffer)
@@ -439,7 +446,60 @@ abstract class WebSocketEngineSuite<TEngine : ApplicationEngine, TConfiguration 
         }
     }
 
-    private fun Socket.assertCloseFrame(closeCode: Short = CloseReason.Codes.NORMAL.code) {
+    @Test
+    fun testServerClosingFirst() {
+        createAndStartServer {
+            webSocket("/") {
+                close(CloseReason(CloseReason.Codes.TRY_AGAIN_LATER, "test"))
+            }
+        }
+
+        socket {
+            // send upgrade request
+            outputStream.apply {
+                write("""
+                GET / HTTP/1.1
+                Host: localhost:$port
+                Upgrade: websocket
+                Connection: Upgrade
+                Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+                Origin: http://localhost:$port
+                Sec-WebSocket-Protocol: chat
+                Sec-WebSocket-Version: 13
+                """.trimIndent().replace("\n", "\r\n").toByteArray())
+                write("\r\n\r\n".toByteArray())
+                flush()
+            }
+
+            val status = inputStream.parseStatus()
+            assertEquals(HttpStatusCode.SwitchingProtocols.value, status.value)
+
+            val headers = inputStream.parseHeaders()
+            assertEquals("Upgrade", headers[HttpHeaders.Connection])
+            assertEquals("websocket", headers[HttpHeaders.Upgrade])
+
+            // it should be close frame immediately
+            assertCloseFrame(CloseReason.Codes.TRY_AGAIN_LATER.code, replyCloseFrame = false)
+
+            // we should be able to write close frame back
+            val sendBuffer = ByteBuffer.allocate(64)
+            outputStream.apply {
+                sendBuffer.clear()
+                Serializer().apply {
+                    enqueue(Frame.Close())
+                    sendBuffer.clear()
+                    serialize(sendBuffer)
+                    sendBuffer.flip()
+                }
+
+                write(sendBuffer.array(), 0, sendBuffer.remaining())
+                flush()
+            }
+        }
+    }
+
+    private fun Socket.assertCloseFrame(closeCode: Short = CloseReason.Codes.NORMAL.code,
+                                        replyCloseFrame: Boolean = true) {
         loop@
         while (true) {
             val frame = getInputStream().readFrame()
@@ -448,7 +508,7 @@ abstract class WebSocketEngineSuite<TEngine : ApplicationEngine, TConfiguration 
                 is Frame.Ping -> continue@loop
                 is Frame.Close -> {
                     assertEquals(closeCode, frame.readReason()?.code)
-                    close()
+                    if (replyCloseFrame) close()
                     break@loop
                 }
                 else -> fail("Unexpected frame $frame: \n${hex(frame.buffer.moveToByteArray())}")

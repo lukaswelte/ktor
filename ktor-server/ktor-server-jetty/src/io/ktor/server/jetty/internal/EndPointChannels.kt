@@ -1,18 +1,24 @@
 package io.ktor.server.jetty.internal
 
-import io.ktor.cio.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
+import io.ktor.util.*
+import io.ktor.util.cio.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 import kotlinx.io.pool.*
 import org.eclipse.jetty.io.*
 import org.eclipse.jetty.util.*
+import java.lang.Runnable
 import java.nio.ByteBuffer
 import java.nio.channels.*
+import java.util.concurrent.*
 import java.util.concurrent.atomic.*
-import kotlin.coroutines.experimental.*
-
+import kotlin.coroutines.*
 
 private const val JETTY_WEBSOCKET_POOL_SIZE = 2000
+
+private val EndpointReaderCoroutineName = CoroutineName("jetty-upgrade-endpoint-reader")
+
+private val EndpointWriterCoroutineName = CoroutineName("jetty-upgrade-endpoint-writer")
 
 private object JettyWebSocketPool : DefaultPool<ByteBuffer>(JETTY_WEBSOCKET_POOL_SIZE) {
     override fun produceInstance(): ByteBuffer = ByteBuffer.allocate(4096)!!
@@ -20,8 +26,9 @@ private object JettyWebSocketPool : DefaultPool<ByteBuffer>(JETTY_WEBSOCKET_POOL
     override fun clearInstance(instance: ByteBuffer): ByteBuffer = instance.apply { clear() }
 }
 
-internal class EndPointReader(endpoint: EndPoint, context: CoroutineContext, private val channel: ByteWriteChannel)
-    : AbstractConnection(endpoint, context.executor()), Connection.UpgradeTo {
+internal class EndPointReader(endpoint: EndPoint,
+                              override val coroutineContext: CoroutineContext, private val channel: ByteWriteChannel)
+    : AbstractConnection(endpoint, coroutineContext.executor()), Connection.UpgradeTo, CoroutineScope {
     private val currentHandler = AtomicReference<Continuation<Unit>>()
     private val buffer = JettyWebSocketPool.borrow()
 
@@ -29,29 +36,31 @@ internal class EndPointReader(endpoint: EndPoint, context: CoroutineContext, pri
         runReader()
     }
 
-    private fun runReader() = launch(Unconfined) {
-        try {
-            while (true) {
-                buffer.clear()
-                suspendCancellableCoroutine<Unit> { continuation ->
-                    currentHandler.compareAndSet(null, continuation)
-                    fillInterested()
-                }
+    private fun runReader(): Job {
+        return launch(EndpointReaderCoroutineName + Dispatchers.Unconfined) {
+            try {
+                while (true) {
+                    buffer.clear()
+                    suspendCancellableCoroutine<Unit> { continuation ->
+                        currentHandler.compareAndSet(null, continuation)
+                        fillInterested()
+                    }
 
-                channel.writeFully(buffer)
+                    channel.writeFully(buffer)
+                }
+            } catch (cause: Throwable) {
+                if (cause !is ClosedChannelException) channel.close(cause)
+            } finally {
+                channel.close()
+                JettyWebSocketPool.recycle(buffer)
             }
-        } catch (cause: Throwable) {
-            if (cause !is ClosedChannelException) channel.close(cause)
-        } finally {
-            channel.close()
-            JettyWebSocketPool.recycle(buffer)
         }
     }
 
     override fun onIdleExpired() = false
 
     override fun onFillable() {
-        val handler = currentHandler.getAndSet(null)
+        val handler = currentHandler.getAndSet(null) ?: return
         buffer.flip()
         val count = try {
             endPoint.fill(buffer)
@@ -68,7 +77,14 @@ internal class EndPointReader(endpoint: EndPoint, context: CoroutineContext, pri
 
     override fun onFillInterestedFailed(cause: Throwable) {
         super.onFillInterestedFailed(cause)
-        currentHandler.getAndSet(null)?.resumeWithException(cause)
+        currentHandler.getAndSet(null)?.resumeWithException(ChannelReadException(exception = cause))
+    }
+
+    override fun failedCallback(callback: Callback, cause: Throwable) {
+        super.failedCallback(callback, cause)
+
+        val handler = currentHandler.getAndSet(null) ?: return
+        handler.resumeWithException(ChannelReadException(exception = cause))
     }
 
     override fun onUpgradeTo(prefilled: ByteBuffer?) {
@@ -80,11 +96,11 @@ internal class EndPointReader(endpoint: EndPoint, context: CoroutineContext, pri
     }
 }
 
-internal fun endPointWriter(
-        endPoint: EndPoint,
-        pool: ObjectPool<ByteBuffer> = JettyWebSocketPool
-): ByteWriteChannel = reader(Unconfined, autoFlush = true) {
-    pool.use { buffer ->
+internal fun CoroutineScope.endPointWriter(
+    endPoint: EndPoint,
+    pool: ObjectPool<ByteBuffer> = JettyWebSocketPool
+): ByteWriteChannel = reader(EndpointWriterCoroutineName + Dispatchers.Unconfined, autoFlush = true) {
+    pool.useInstance { buffer: ByteBuffer ->
         endPoint.use { endPoint ->
             while (!channel.isClosedForRead) {
                 buffer.clear()
@@ -104,7 +120,16 @@ private suspend fun EndPoint.write(buffer: ByteBuffer) = suspendCancellableCorou
         }
 
         override fun failed(cause: Throwable) {
-            continuation.resumeWithException(cause)
+            continuation.resumeWithException(ChannelWriteException(exception = cause))
         }
     }, buffer)
+}
+
+private fun CoroutineContext.executor(): Executor = object : Executor, CoroutineScope {
+    override val coroutineContext: CoroutineContext
+        get() = this@executor
+
+    override fun execute(command: Runnable?) {
+        launch { command?.run() }
+    }
 }

@@ -3,21 +3,23 @@ package io.ktor.client.engine.cio
 import io.ktor.client.call.*
 import io.ktor.client.request.*
 import io.ktor.client.response.*
-import io.ktor.content.*
 import io.ktor.http.*
 import io.ktor.http.cio.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
-import java.util.*
+import io.ktor.util.date.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
+import kotlin.coroutines.*
 
-class CIOHttpResponse(
-        request: HttpRequest,
-        override val requestTime: Date,
-        override val content: ByteReadChannel,
-        private val response: Response
+internal class CIOHttpResponse(
+    request: HttpRequest,
+    override val requestTime: GMTDate,
+    override val content: ByteReadChannel,
+    private val response: Response,
+    private val pipelined: Boolean,
+    override val coroutineContext: CoroutineContext
 ) : HttpResponse {
     override val call: HttpClientCall = request.call
-    override val status: HttpStatusCode = HttpStatusCode.fromValue(response.status)
+    override val status: HttpStatusCode = HttpStatusCode(response.status, response.statusText.toString())
     override val version: HttpProtocolVersion = HttpProtocolVersion.HTTP_1_1
     override val headers: Headers = Headers.build {
         val origin = CIOHeaders(response.headers)
@@ -26,12 +28,16 @@ class CIOHttpResponse(
         }
     }
 
-    override val responseTime: Date = Date()
-
-    override val executionContext: CompletableDeferred<Unit> = CompletableDeferred()
+    override val responseTime: GMTDate = GMTDate()
 
     override fun close() {
+        super.close()
+        if (pipelined) {
+            runBlocking {
+                val length = headers[HttpHeaders.ContentLength]!!.toLong()
+                content.discard(length - content.totalBytesRead)
+            }
+        }
         response.release()
-        executionContext.complete(Unit)
     }
 }

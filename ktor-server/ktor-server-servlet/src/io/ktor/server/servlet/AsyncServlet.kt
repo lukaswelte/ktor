@@ -1,56 +1,74 @@
 package io.ktor.server.servlet
 
 import io.ktor.application.*
-import io.ktor.cio.*
-import io.ktor.content.*
+import io.ktor.util.cio.*
+import io.ktor.http.content.*
 import io.ktor.response.*
 import io.ktor.server.engine.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 import java.io.*
 import java.lang.reflect.*
 import javax.servlet.http.*
-import kotlin.coroutines.experimental.*
+import kotlin.coroutines.*
 
+@Suppress("KDocMissingDocumentation")
+@EngineAPI
 open class AsyncServletApplicationCall(
     application: Application,
     servletRequest: HttpServletRequest,
     servletResponse: HttpServletResponse,
     engineContext: CoroutineContext,
     userContext: CoroutineContext,
-    upgrade: ServletUpgrade
-) : BaseApplicationCall(application) {
+    upgrade: ServletUpgrade,
+    parentCoroutineContext: CoroutineContext
+) : BaseApplicationCall(application), CoroutineScope {
 
-    override val request: ServletApplicationRequest = AsyncServletApplicationRequest(this, servletRequest)
+    override val coroutineContext: CoroutineContext = parentCoroutineContext
 
-    override val response: ServletApplicationResponse = AsyncServletApplicationResponse(
-        this, servletRequest, servletResponse, engineContext, userContext, upgrade
-    )
+    override val request: AsyncServletApplicationRequest =
+        AsyncServletApplicationRequest(this, servletRequest, parentCoroutineContext + engineContext)
+
+    override val response: ServletApplicationResponse by lazy {
+        AsyncServletApplicationResponse(
+            this,
+            servletRequest, servletResponse,
+            engineContext, userContext, upgrade, parentCoroutineContext + engineContext
+        )
+    }
 }
 
+@Suppress("KDocMissingDocumentation")
+@EngineAPI
 class AsyncServletApplicationRequest(
-    call: ApplicationCall, servletRequest: HttpServletRequest
-) : ServletApplicationRequest(call, servletRequest) {
+    call: ApplicationCall, servletRequest: HttpServletRequest,
+    override val coroutineContext: CoroutineContext
+) : ServletApplicationRequest(call, servletRequest), CoroutineScope {
 
-    private val copyJob by lazy { servletReader(servletRequest.inputStream) }
-    override fun receiveContent(): IncomingContent = AsyncServletIncomingContent(this, copyJob)
-    override fun receiveChannel() = copyJob.channel
+    private var upgraded = false
+    private val inputStreamChannel by lazy {
+        if (!upgraded) servletReader(servletRequest.inputStream).channel else ByteReadChannel.Empty
+    }
+
+    override fun receiveChannel(): ByteReadChannel = inputStreamChannel
+
+    @EngineAPI
+    internal fun upgraded() {
+        upgraded = true
+    }
 }
 
-private class AsyncServletIncomingContent(
-    request: ServletApplicationRequest,
-    val copyJob: WriterJob
-) : ServletIncomingContent(request) {
-    override fun readChannel(): ByteReadChannel = copyJob.channel
-}
-
+@Suppress("KDocMissingDocumentation")
+@EngineAPI
 open class AsyncServletApplicationResponse(
-    call: ApplicationCall,
+    call: AsyncServletApplicationCall,
     protected val servletRequest: HttpServletRequest,
     servletResponse: HttpServletResponse,
     private val engineContext: CoroutineContext,
     private val userContext: CoroutineContext,
-    private val servletUpgradeImpl: ServletUpgrade
-) : ServletApplicationResponse(call, servletResponse) {
+    private val servletUpgradeImpl: ServletUpgrade,
+    override val coroutineContext: CoroutineContext
+) : ServletApplicationResponse(call, servletResponse), CoroutineScope {
     override fun createResponseJob(): ReaderJob =
         servletWriter(servletResponse.outputStream)
 
@@ -61,6 +79,7 @@ open class AsyncServletApplicationResponse(
             throw ChannelWriteException("Cannot write HTTP upgrade response", e)
         }
 
+        (call.request as AsyncServletApplicationRequest).upgraded()
         completed = true
 
         servletUpgradeImpl.performUpgrade(upgrade, servletRequest, servletResponse, engineContext, userContext)

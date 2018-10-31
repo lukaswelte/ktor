@@ -1,5 +1,6 @@
 package io.ktor.client.tests
 
+import io.ktor.application.*
 import io.ktor.client.*
 import io.ktor.client.engine.*
 import io.ktor.client.features.cookies.*
@@ -10,16 +11,17 @@ import io.ktor.response.*
 import io.ktor.routing.*
 import io.ktor.server.engine.*
 import io.ktor.server.jetty.*
-import kotlinx.coroutines.experimental.*
-import org.junit.*
-import org.junit.Assert.*
+import kotlinx.coroutines.*
+import kotlin.test.*
 
 
 abstract class CookiesTest(private val factory: HttpClientEngineFactory<*>) : TestWithKtor() {
+    private val hostname = "http://localhost"
+
     override val server: ApplicationEngine = embeddedServer(Jetty, serverPort) {
         routing {
             get("/") {
-                val cookie = Cookie("hello-cookie", "my-awesome-value")
+                val cookie = Cookie("hello-cookie", "my-awesome-value", domain = "localhost")
                 context.response.cookies.append(cookie)
 
                 context.respond("Done")
@@ -31,115 +33,208 @@ abstract class CookiesTest(private val factory: HttpClientEngineFactory<*>) : Te
                     return@get
                 }
 
-                context.response.cookies.append(Cookie("id", (id + 1).toString()))
-                context.response.cookies.append(Cookie("user", "ktor"))
+                with(context.response.cookies) {
+                    append(Cookie("id", (id + 1).toString(), domain = "localhost", path = "/"))
+                    append(Cookie("user", "ktor", domain = "localhost", path = "/"))
+                }
 
                 context.respond("Done")
+            }
+            get("/multiple") {
+                val cookies = context.request.cookies
+                val first = cookies["first"] ?: fail()
+                val second = cookies["second"] ?: fail()
+
+                assertEquals("first-cookie", first)
+                assertEquals("second-cookie", second)
+                context.respond("Multiple done")
+            }
+            get("/withPath") {
+                val cookie = Cookie("marker", "value", path = "/withPath/")
+                context.response.cookies.append(cookie)
+                context.respond("OK")
+            }
+            get("/withPath/something") {
+                val cookies = context.request.cookies
+                if (cookies["marker"] == "value") {
+                    context.respond("OK")
+                } else {
+                    context.respond(HttpStatusCode.BadRequest)
+                }
+            }
+            get("/foo") {
+                val cookie = Cookie("foo", "bar")
+                context.response.cookies.append(cookie)
+
+                call.respond("OK")
+            }
+            get("/FOO") {
+                assertTrue(call.request.cookies.rawCookies.isEmpty())
+                call.respond("OK")
             }
         }
     }
 
     @Test
-    fun testAccept() {
-        val client = HttpClient(factory) {
+    fun testAccept(): Unit = clientTest(factory) {
+        config {
             install(HttpCookies)
         }
 
-        runBlocking { client.get<Unit>(port = serverPort) }
-
-        client.cookies("localhost").let {
-            assertEquals(1, it.size)
-            assertEquals("my-awesome-value", it["hello-cookie"]!!.value)
+        test { client ->
+            client.get<Unit>(port = serverPort)
+            client.cookies(hostname).let {
+                assertEquals(1, it.size)
+                assertEquals("my-awesome-value", it["hello-cookie"]!!.value)
+            }
         }
-
-        client.close()
     }
 
     @Test
-    fun testUpdate() = runBlocking {
-        val client = HttpClient(factory) {
+    fun testUpdate(): Unit = clientTest(factory) {
+        config {
             install(HttpCookies) {
                 default {
-                    addCookie("localhost", Cookie("id", "1"))
+                    runBlocking {
+                        addCookie(hostname, Cookie("id", "1", domain = "localhost"))
+                    }
                 }
             }
         }
 
-        repeat(10) {
-            val before = client.getId()
-            client.get<Unit>(path = "/update-user-id", port = serverPort)
-            assertEquals(before + 1, client.getId())
-            assertEquals("ktor", client.cookies("localhost")["user"]?.value)
+        test { client ->
+            repeat(10) {
+                val before = client.getId()
+                client.get<Unit>(path = "/update-user-id", port = serverPort)
+                assertEquals(before + 1, client.getId())
+                assertEquals("ktor", client.cookies(hostname)["user"]?.value)
+            }
         }
-
-        client.close()
     }
 
     @Test
-    fun testConstant() {
-        val client = HttpClient(factory) {
+    fun testConstant(): Unit = clientTest(factory) {
+        config {
             install(HttpCookies) {
-                storage = ConstantCookieStorage(Cookie("id", "1"))
+                storage = ConstantCookiesStorage(Cookie("id", "1", domain = "localhost"))
             }
         }
 
-        fun check() {
-            assertEquals(1, client.getId())
-            assertEquals(null, client.cookies("localhost")["user"]?.value)
+        test { client ->
+            repeat(3) {
+                client.get<Unit>(path = "/update-user-id", port = serverPort)
+                assertEquals(1, client.getId())
+                assertNull(client.cookies(hostname)["user"]?.value)
+            }
+        }
+    }
+
+    @Test
+    fun testMultipleCookies(): Unit = clientTest(factory) {
+        config {
+            install(HttpCookies) {
+                default {
+                    runBlocking {
+                        addCookie(hostname, Cookie("first", "first-cookie", domain = "localhost"))
+                        addCookie(hostname, Cookie("second", "second-cookie", domain = "localhost"))
+                    }
+                }
+            }
         }
 
-        runBlocking { client.get<Unit>(path = "/update-user-id", port = serverPort) }
-        check()
+        test { client ->
+            val response = client.get<String>(port = serverPort, path = "/multiple")
+            assertEquals("Multiple done", response)
+        }
+    }
 
-        runBlocking { client.get<Unit>(path = "/update-user-id", port = serverPort) }
-        check()
+    @Test
+    fun testPath() = clientTest(factory) {
+        config {
+            install(HttpCookies)
+        }
 
-        client.close()
+        test { client ->
+            assertEquals("OK", client.get<String>(port = serverPort, path = "/withPath"))
+            assertEquals("OK", client.get<String>(port = serverPort, path = "/withPath/something"))
+        }
+    }
+
+    @Test
+    fun testWithLeadingDot() = clientTest(factory) {
+        config {
+            install(HttpCookies)
+        }
+
+        test { client ->
+            client.get<Unit>("https://m.vk.com")
+            assert(client.cookies("https://.vk.com").isNotEmpty())
+            assert(client.cookies("https://vk.com").isNotEmpty())
+            assert(client.cookies("https://m.vk.com").isNotEmpty())
+            assert(client.cookies("https://m.vk.com").isNotEmpty())
+
+            assert(client.cookies("https://google.com").isEmpty())
+        }
+    }
+
+    @Test
+    fun caseSensitive() = clientTest(factory) {
+        config {
+            install(HttpCookies)
+        }
+
+        test { client ->
+            try {
+                client.get<Unit>(port = serverPort, path = "/foo")
+                client.get<Unit>(port = serverPort, path = "/FOO")
+            } catch (cause: Throwable) {
+                throw cause
+            }
+        }
     }
 
     @Test
     @Ignore
-    fun multipleClients() {
+    fun multipleClients() = runBlocking {
         /* a -> b
          * |    |
          * c    d
          */
         val client = HttpClient(factory)
-        val a = client.config { install(HttpCookies) { default { addCookie("localhost", Cookie("id", "1")) } } }
-        val b = a.config { install(HttpCookies) { default { addCookie("localhost", Cookie("id", "10")) } } }
+        val a = client.config {
+            install(HttpCookies) {
+                default { runBlocking { addCookie(hostname, Cookie("id", "1")) } }
+            }
+        }
+        val b = a.config {
+            install(HttpCookies) { default { runBlocking { addCookie(hostname, Cookie("id", "10")) } } }
+        }
+
         val c = a.config { }
         val d = b.config { }
 
-        runBlocking {
-            a.get<Unit>(path = "/update-user-id", port = serverPort)
-        }
+        a.get<Unit>(path = "/update-user-id", port = serverPort)
 
         assertEquals(2, a.getId())
         assertEquals(2, c.getId())
         assertEquals(10, b.getId())
         assertEquals(10, d.getId())
 
-        runBlocking {
-            b.get<Unit>(path = "/update-user-id", port = serverPort)
-        }
+        b.get<Unit>(path = "/update-user-id", port = serverPort)
 
         assertEquals(2, a.getId())
         assertEquals(2, c.getId())
         assertEquals(11, b.getId())
         assertEquals(11, d.getId())
 
-        runBlocking {
-            c.get<Unit>(path = "/update-user-id", port = serverPort)
-        }
+        c.get<Unit>(path = "/update-user-id", port = serverPort)
 
         assertEquals(3, a.getId())
         assertEquals(3, c.getId())
         assertEquals(11, b.getId())
         assertEquals(11, d.getId())
 
-        runBlocking {
-            d.get<Unit>(path = "/update-user-id", port = serverPort)
-        }
+        d.get<Unit>(path = "/update-user-id", port = serverPort)
 
         assertEquals(3, a.getId())
         assertEquals(3, c.getId())
@@ -149,7 +244,5 @@ abstract class CookiesTest(private val factory: HttpClientEngineFactory<*>) : Te
         client.close()
     }
 
-    private fun HttpClient.config(block: HttpClientConfig.() -> Unit): HttpClient = TODO()
-
-    private fun HttpClient.getId() = cookies("localhost")["id"]?.value?.toInt()!!
+    private suspend fun HttpClient.getId() = cookies(hostname)["id"]!!.value.toInt()
 }

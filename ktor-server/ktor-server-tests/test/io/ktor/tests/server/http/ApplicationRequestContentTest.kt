@@ -1,12 +1,13 @@
 package io.ktor.tests.server.http
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.features.*
 import io.ktor.http.*
 import io.ktor.request.*
+import io.ktor.response.*
+import io.ktor.routing.*
 import io.ktor.server.testing.*
-import io.ktor.util.*
-import kotlinx.coroutines.experimental.io.*
+import kotlinx.coroutines.io.*
 import org.junit.Test
 import kotlin.test.*
 
@@ -19,7 +20,7 @@ class ApplicationRequestContentTest {
             }
 
             handleRequest(HttpMethod.Get, "") {
-                body = "bodyContent"
+                setBody("bodyContent")
             }
         }
     }
@@ -30,12 +31,14 @@ class ApplicationRequestContentTest {
             val values = parametersOf("a", "1")
 
             application.intercept(ApplicationCallPipeline.Call) {
-                assertEquals(values, call.receiveParameters())
+                val actual = call.receiveParameters()
+                assertEquals(values, actual)
             }
 
             handleRequest(HttpMethod.Post, "") {
                 addHeader(HttpHeaders.ContentType, "application/x-www-form-urlencoded")
-                body = values.formUrlEncode()
+                val value = values.formUrlEncode()
+                setBody(value)
             }
         }
     }
@@ -51,7 +54,7 @@ class ApplicationRequestContentTest {
 
             handleRequest(HttpMethod.Post, "") {
                 addHeader(HttpHeaders.ContentType, "application/x-www-form-urlencoded; charset=UTF-8")
-                body = values.formUrlEncode()
+                setBody(values.formUrlEncode())
             }
         }
     }
@@ -64,7 +67,7 @@ class ApplicationRequestContentTest {
             }
 
             handleRequest(HttpMethod.Get, "") {
-                body = "bodyContent"
+                setBody("bodyContent")
             }
         }
     }
@@ -88,7 +91,7 @@ class ApplicationRequestContentTest {
             }
 
             handleRequest(HttpMethod.Get, "") {
-                body = value.toString()
+                setBody(value.toString())
             }
         }
     }
@@ -106,8 +109,40 @@ class ApplicationRequestContentTest {
 
             handleRequest(HttpMethod.Post, "") {
                 addHeader(HttpHeaders.ContentType, ContentType.Application.FormUrlEncoded.toString())
-                body = values.formUrlEncode()
+                setBody(values.formUrlEncode())
             }
+        }
+    }
+
+    @Test
+    fun testReceiveUnsupportedTypeFailing(): Unit = withTestApplication {
+        application.install(ContentNegotiation)
+
+        application.routing {
+            get("/") {
+                val v = call.receive<IntList>()
+                call.respondText(v.values.joinToString())
+            }
+        }
+
+        handleRequest(HttpMethod.Get, "/").let { call ->
+            assertEquals(415, call.response.status()?.value)
+        }
+    }
+
+    @Test
+    fun testReceiveUnsupportedTypeNotFailing(): Unit = withTestApplication {
+        application.install(ContentNegotiation)
+
+        application.routing {
+            get("/") {
+                val v = call.receiveOrNull<IntList>()
+                call.respondText(v?.values?.joinToString() ?: "(none)")
+            }
+        }
+
+        handleRequest(HttpMethod.Get, "/").let { call ->
+            assertEquals(200, call.response.status()?.value)
         }
     }
 }

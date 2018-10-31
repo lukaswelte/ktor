@@ -1,12 +1,11 @@
 package io.ktor.tests.utils
 
 import io.ktor.util.*
-import org.junit.Test
 import kotlin.test.*
 
 class StringValuesTest {
     @Test
-    fun `single value map`() {
+    fun singleValueMap() {
         val map = StringValues.build {
             append("key1", "value1")
         }
@@ -18,7 +17,7 @@ class StringValuesTest {
     }
 
     @Test
-    fun `two value map`() {
+    fun twoValueMap() {
         val map = StringValues.build {
             append("key1", "value1")
             append("key1", "value2")
@@ -32,7 +31,7 @@ class StringValuesTest {
     }
 
     @Test
-    fun `three value case insensitive map`() {
+    fun threeValueCaseInsensitiveMap() {
         val map = StringValues.build(true) {
             append("Key1", "value1")
             append("Key1", "value2")
@@ -51,7 +50,7 @@ class StringValuesTest {
     }
 
     @Test
-    fun `add empty values list adds a key`() {
+    fun addEmptyValuesListAddsKey() {
         val map = StringValues.build {
             appendAll("key", emptyList())
         }
@@ -61,7 +60,7 @@ class StringValuesTest {
     }
 
     @Test
-    fun `remove last should keep the key`() {
+    fun removeLastShouldKeepTheKey() {
         val map = StringValues.build {
             append("key", "value")
             remove("key", "value")
@@ -72,12 +71,14 @@ class StringValuesTest {
     }
 
     @Test
-    fun `filter`() {
+    fun filter() {
         val map = StringValues.build(true) {
             append("Key1", "value1")
             append("Key1", "value2")
             append("Key1", "Value3")
         }.filter { _, value -> value.startsWith("V") }
+        val names = map.names()
+        setOf("Key1") == names
         assertEquals("Value3", map["key1"])
         assertEquals("Value3", map["keY1"])
         assertEquals(setOf("Key1"), map.names())
@@ -91,7 +92,7 @@ class StringValuesTest {
     }
 
     @Test
-    fun `appendFilter`() {
+    fun appendFilter() {
         val original = StringValues.build(true) {
             append("Key1", "value1")
             append("Key1", "value2")

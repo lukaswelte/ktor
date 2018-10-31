@@ -3,38 +3,47 @@ package io.ktor.client.engine.cio
 import io.ktor.client.call.*
 import io.ktor.client.engine.*
 import io.ktor.client.request.*
-import io.ktor.client.utils.*
-import io.ktor.content.*
-import kotlinx.coroutines.experimental.channels.*
-import java.nio.channels.*
+import io.ktor.http.*
+import io.ktor.network.selector.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
 import java.util.concurrent.*
 import java.util.concurrent.atomic.*
 
-class CIOEngine(private val config: CIOEngineConfig) : HttpClientEngine {
-    private val dispatcher = config.dispatcher ?: HTTP_CLIENT_DEFAULT_DISPATCHER
+internal class CIOEngine(override val config: CIOEngineConfig) : HttpClientJvmEngine("ktor-cio") {
     private val endpoints = ConcurrentHashMap<String, Endpoint>()
-    private val connectionFactory = ConnectionFactory(config.maxConnectionsCount)
+    @UseExperimental(InternalCoroutinesApi::class)
+    private val selectorManager by lazy { ActorSelectorManager(coroutineContext + dispatcher.blocking(1)) }
+
+    private val connectionFactory = ConnectionFactory(selectorManager, config.maxConnectionsCount)
     private val closed = AtomicBoolean()
 
-    override fun prepareRequest(builder: HttpRequestBuilder, call: HttpClientCall): HttpRequest =
-            CIOHttpRequest(call, this, builder.build())
+    override suspend fun execute(call: HttpClientCall, data: HttpRequestData): HttpEngineCall {
+        val request = DefaultHttpRequest(call, data)
+        val response = executeRequest(request)
 
-    internal suspend fun executeRequest(request: CIOHttpRequest, content: OutgoingContent): CIOHttpResponse {
+        return HttpEngineCall(request, response)
+    }
+
+    private suspend fun executeRequest(request: DefaultHttpRequest): CIOHttpResponse {
         while (true) {
             if (closed.get()) throw ClientClosedException()
 
             val endpoint = with(request.url) {
-                val address = "$host:$port"
+                val address = "$host:$port:$protocol"
                 endpoints.computeIfAbsent(address) {
-                    Endpoint(host, port, dispatcher, config.endpointConfig, connectionFactory) {
-                        endpoints.remove(address)
-                    }
+                    val secure = (protocol.isSecure())
+                    Endpoint(
+                        host, port, secure,
+                        config,
+                        connectionFactory, coroutineContext,
+                        createCallContext = { createCallContext() }, onDone = { endpoints.remove(address) }
+                    )
                 }
-
             }
 
             try {
-                return endpoint.execute(request, content)
+                return endpoint.execute(request)
             } catch (cause: ClosedSendChannelException) {
                 if (closed.get()) throw ClientClosedException(cause)
                 continue
@@ -50,6 +59,9 @@ class CIOEngine(private val config: CIOEngineConfig) : HttpClientEngine {
         endpoints.forEach { (_, endpoint) ->
             endpoint.close()
         }
+
+        selectorManager.close()
+        super.close()
     }
 }
 

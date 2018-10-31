@@ -1,8 +1,8 @@
 package io.ktor.sessions
 
-import io.ktor.cio.*
-import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.io.*
+import io.ktor.util.cio.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.io.*
 import java.util.concurrent.*
 
 /**
@@ -17,9 +17,13 @@ class SessionStorageMemory : SessionStorage {
     private val sessions = ConcurrentHashMap<String, ByteArray>()
 
     override suspend fun write(id: String, provider: suspend (ByteWriteChannel) -> Unit) {
-        sessions[id] = writer(Unconfined, autoFlush = true) {
-            provider(channel)
-        }.channel.toByteArray()
+        coroutineScope {
+            val channel = writer(Dispatchers.Unconfined, autoFlush = true) {
+                provider(channel)
+            }.channel
+
+            sessions[id] = channel.toByteArray()
+        }
     }
 
     override suspend fun <R> read(id: String, consumer: suspend (ByteReadChannel) -> R): R =

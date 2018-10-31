@@ -1,13 +1,17 @@
 package io.ktor.features
 
 import io.ktor.application.*
-import io.ktor.content.*
+import io.ktor.http.content.*
 import io.ktor.http.*
-import io.ktor.pipeline.*
+import io.ktor.util.pipeline.*
 import io.ktor.response.*
 import io.ktor.util.*
 import java.util.*
 
+/**
+ * Feature that set [CachingOptions] headers for every response.
+ * It invokes [optionsProviders] for every response and use first non null caching options
+ */
 class CachingHeaders(private val optionsProviders: List<(OutgoingContent) -> CachingOptions?>) {
     /**
      * Configuration for [CachingHeaders] feature
@@ -36,8 +40,7 @@ class CachingHeaders(private val optionsProviders: List<(OutgoingContent) -> Cac
                 options.forEach {
                     if (it.cacheControl != null)
                         append(HttpHeaders.CacheControl, it.cacheControl.toString())
-                    if (it.expires != null)
-                        append(HttpHeaders.Expires, it.expires.toHttpDateString())
+                    it.expires?.let { expires -> append(HttpHeaders.Expires, expires.toHttpDate()) }
                 }
             }
 

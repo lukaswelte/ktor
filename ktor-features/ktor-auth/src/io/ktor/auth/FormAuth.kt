@@ -4,22 +4,55 @@ import io.ktor.application.*
 import io.ktor.http.*
 import io.ktor.request.*
 import io.ktor.response.*
-import io.ktor.util.*
 
 /**
- * Installs Form Authentication mechanism into [AuthenticationPipeline]
+ * Represents a form-based authentication provider
+ * @param name is the name of the provider, or `null` for a default provider
  */
-fun AuthenticationPipeline.formAuthentication(userParamName: String = "user",
-                                                           passwordParamName: String = "password",
-                                                           challenge: FormAuthChallenge = FormAuthChallenge.Unauthorized,
-                                                           validate: (UserPasswordCredential) -> Principal?) {
-    intercept(AuthenticationPipeline.RequestAuthentication) { context ->
+class FormAuthenticationProvider(name: String?) : AuthenticationProvider(name) {
+    internal var authenticationFunction: suspend ApplicationCall.(UserPasswordCredential) -> Principal? = { null }
+
+    /**
+     * POST parameter to fetch for a user name
+     */
+    var userParamName: String = "user"
+
+    /**
+     * POST parameter to fetch for a user password
+     */
+    var passwordParamName: String = "password"
+
+    /**
+     * A response to send back if authentication failed
+     */
+    var challenge: FormAuthChallenge = FormAuthChallenge.Unauthorized
+
+    /**
+     * Sets a validation function that will check given [UserPasswordCredential] instance and return [Principal],
+     * or null if credential does not correspond to an authenticated principal
+     */
+    fun validate(body: suspend ApplicationCall.(UserPasswordCredential) -> Principal?) {
+        authenticationFunction = body
+    }
+}
+
+/**
+ * Installs Form Authentication mechanism
+ */
+fun Authentication.Configuration.form(name: String? = null, configure: FormAuthenticationProvider.() -> Unit) {
+    val provider = FormAuthenticationProvider(name).apply(configure)
+    val userParamName = provider.userParamName
+    val passwordParamName = provider.passwordParamName
+    val validate = provider.authenticationFunction
+    val challenge = provider.challenge
+
+    provider.pipeline.intercept(AuthenticationPipeline.RequestAuthentication) { context ->
         val postParameters = call.receiveOrNull<Parameters>()
         val username = postParameters?.get(userParamName)
         val password = postParameters?.get(passwordParamName)
 
         val credentials = if (username != null && password != null) UserPasswordCredential(username, password) else null
-        val principal = credentials?.let(validate)
+        val principal = credentials?.let { validate(call, it) }
 
         if (principal != null) {
             context.principal(principal)
@@ -34,10 +67,31 @@ fun AuthenticationPipeline.formAuthentication(userParamName: String = "user",
             }
         }
     }
+    register(provider)
 }
 
+
+/**
+ * Specifies what to send back if form authentication fails.
+ */
 sealed class FormAuthChallenge {
-    class Redirect(val url: (ApplicationCall, UserPasswordCredential?) -> String) : FormAuthChallenge()
+    /**
+     * Redirect to an URL provided by the given function.
+     * @property url is a function receiving [ApplicationCall] and [UserPasswordCredential] and returning an URL to redirect to.
+     */
+    class Redirect(val url: ApplicationCall.(UserPasswordCredential?) -> String) : FormAuthChallenge() {
+        @Deprecated(
+            "Call is passed as receiver",
+            ReplaceWith("FormAuthChallenge.Redirect { c -> oldUrl(c) }"),
+            level = DeprecationLevel.ERROR
+        )
+        @Suppress("UNUSED_PARAMETER")
+        constructor(forMigration: Unit = Unit, url: (ApplicationCall, UserPasswordCredential?) -> String) : this(url)
+    }
+
+    /**
+     * Respond with [HttpStatusCode.Unauthorized].
+     */
     object Unauthorized : FormAuthChallenge()
 }
 
